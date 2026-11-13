@@ -20,7 +20,7 @@ SQLCipher 解密、群消息分库查询、发送者映射和增量监听。
 ```bash
 git clone https://github.com/iosyyy/wechatauto-replica.git
 cd wechatauto-replica
-git switch codex/linux-native-backend
+git switch main
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install .
@@ -28,6 +28,13 @@ python -m pip install .
 
 Linux 安装不包含 Windows UIAutomation、pywin32、WinRT OCR 或 Windows GUI
 媒体依赖。无需先安装或启动微信窗口即可读取已具备合法密钥的数据库副本。
+
+## 官方客户端登录桌面
+
+服务器没有图形桌面时，可使用
+[独立登录示例](../examples/linux-desktop/README.md) 启动官方客户端和私人网页桌面。
+网页端口仅绑定服务器回环，经 SSH 在本机访问；登录态保留在独立的持久目录。
+这一步不启用数据库读取或 LangBot 收发桥接，实际扫码登录仍由账号本人完成。
 
 ## 数据与密钥
 

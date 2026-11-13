@@ -1,0 +1,33 @@
+name: wechatauto-linux
+
+services:
+  desktop:
+    image: ${WECHAT_DESKTOP_IMAGE:-local/wechatauto-linux-desktop:0.1.0}
+    platform: linux/amd64
+    hostname: wechat-linux
+    user: "10001:10001"
+    ports:
+      - "127.0.0.1:${WECHAT_DESKTOP_PORT:-16081}:6080"
+    volumes:
+      - ./.runtime/home:/home/wechat
+      - ./.runtime/machine-id:/etc/machine-id:ro
+    secrets:
+      - desktop_password
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+      - /run:size=16m,mode=755
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    shm_size: 256mb
+    mem_limit: 1024m
+    memswap_limit: 1536m
+    cpus: 1.0
+    pids_limit: 256
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+secrets:
+  desktop_password:
+    file: ./.runtime/desktop-password.txt

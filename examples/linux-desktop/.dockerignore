@@ -1,0 +1,5 @@
+*
+!Dockerfile
+!desktop.py
+!supervisord.conf
+!client.deb

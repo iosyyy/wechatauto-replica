@@ -33,3 +33,9 @@ memory/
 
 # runtime scratch
 tmp_sns_mapping/
+
+# Linux 登录环境的安装包和私人状态
+examples/linux-desktop/client.deb
+examples/linux-desktop/.runtime/
+examples/linux-desktop/.env
+.worktrees/
