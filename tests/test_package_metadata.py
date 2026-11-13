@@ -15,7 +15,7 @@ class PackageMetadataTests(unittest.TestCase):
     def setUp(self):
         path = Path(__file__).resolve().parents[1] / "pyproject.toml"
         self.requirements = [
-            Requirement(r) for r in tomllib.loads(path.read_text())["project"]["dependencies"]
+            Requirement(r) for r in tomllib.loads(path.read_text(encoding="utf-8"))["project"]["dependencies"]
         ]
 
     def names_for(self, platform):
