@@ -2,6 +2,11 @@
 
 > **中文版** 在下方 · **English version below**
 
+> Maintained fork: [iosyyy/wechatauto-replica](https://github.com/iosyyy/wechatauto-replica).
+> Linux reader scope and live-client verification boundaries are documented in
+> [docs/linux.md](docs/linux.md); upstream Windows feature claims below do not
+> establish Linux GUI or automatic key-extraction support.
+
 ## 独立窗口 UIA / Standalone-window UIA
 
 显式指定 `WeChatGUI(hwnd=chat_hwnd)` 或 `WeChatUIA(hwnd=chat_hwnd)` 可绑定已物化的
@@ -49,7 +54,7 @@ discovery still selects main windows, with existing HWND/PID checks preserved.
 本项目复刻上游 wxauto 项目，目标是实现对当前微信 4.x Windows 客户端的自动化
 （读取消息、发送消息、媒体下载、朋友圈），非网页版，直接操作本机客户端。
 
-> 当前版本：1.2.10
+> 当前维护版本：1.2.10+iosyyy.linux.1；Linux 读取范围见 [docs/linux.md](docs/linux.md)。
 >
 > **兼容范围**：Windows 10/11 ｜ Python 3.9+（已在 3.12 验证）｜ 微信 **4.1.12+**（已在 4.1.15.53 / 4.2.0.11 验证）
 > （数据库读取路线对微信版本不敏感；坐标+OCR 发送路线依赖 4.1.12+ 自绘渲染
@@ -1104,7 +1109,8 @@ quick_send_file(r'D:\资料\报告.pdf', '文件传输助手')
 
 Automate the **WeChat 4.x Windows desktop client** (not the web version): read messages, listen in real time, download media, export full history, read Moments (朋友圈), and send messages — by driving the local client directly.
 
-> **Current version:** 1.2.10 · Windows 10/11 · Python 3.9+ (verified on 3.12) · WeChat **4.1.12+** (verified on 4.1.15.13 / 4.2.0.13)
+> **Current version:** 1.2.10+iosyyy.linux.1 · Linux reader scope: [docs/linux.md](docs/linux.md).
+> Upstream Windows baseline: Windows 10/11 · Python 3.9+ (verified on 3.12) · WeChat **4.1.12+** (verified on 4.1.15.13 / 4.2.0.13)
 >
 > **Why this project exists:** the classic [wxauto](https://github.com/cluic/wxauto) relies on the UI Automation tree, which WeChat 4.x broke with self-drawn rendering (no accessibility nodes). wechatauto-replica is a drop-in-style replacement: messages are read through **local database decryption** (SQLCipher 4), and sending uses a **UIA + OCR hybrid** driver that auto-falls back between engines.
 

@@ -1,5 +1,10 @@
 [**English**](README.md) | [**中文**](README.zh-CN.md)
 
+> **维护分支：[iosyyy/wechatauto-replica](https://github.com/iosyyy/wechatauto-replica)**
+> 在 `codex/linux-native-backend` 开发 Linux 原生后端，先实现显式账号、已提供
+> 且验证通过的密钥下的数据库读取。当前能力与真实客户端验收边界见
+> [Linux 使用说明](docs/linux.md)。下方原有 Windows 功能和实测记录不代表 Linux 已验收。
+
 # wechatauto —— 微信 4.x Windows 客户端自动化（wxauto 复刻版）
 
 ![PyPI version](https://img.shields.io/pypi/v/wechatauto-replica)
@@ -19,7 +24,7 @@
 本项目复刻上游 wxauto 项目，目标是实现对当前微信 4.x Windows 客户端的自动化
 （读取消息、发送消息、媒体下载、朋友圈），非网页版，直接操作本机客户端。
 
-> 当前版本：1.2.10
+> 当前维护版本：1.2.10+iosyyy.linux.1；Linux 读取范围见 [docs/linux.md](docs/linux.md)。
 >
 > **兼容范围**：Windows 10/11 ｜ Python 3.9+（已在 3.12 验证）｜ 微信 **4.1.12+**（已在 4.1.15.53 / 4.2.0.11 验证）
 > （数据库读取路线对微信版本不敏感；坐标+OCR 发送路线依赖 4.1.12+ 自绘渲染
