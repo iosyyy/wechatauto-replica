@@ -1,9 +1,12 @@
 # AGENTS.md
 
-Windows-only automation library for the **WeChat 4.x desktop client** (not web). Message APIs take **usernames** (`wxid_*` or `xxx@chatroom`), **never nicknames** — convert with `db.search_contact()` / `db.group_name_to_id()`.
+Maintained fork of the Windows automation library for the **WeChat 4.x desktop client** (not web). The Linux reader foundation uses supplied verified database keys; native Linux automatic key extraction, GUI sending and LangBot bridging are separate acceptance stages. See `docs/linux.md` and `docs/superpowers/specs/2026-11-13-linux-native-design.md`.
+
+Message APIs take **usernames** (`wxid_*` or `xxx@chatroom`), **never nicknames** — convert with `db.search_contact()` / `db.group_name_to_id()`.
 
 ## Running / verifying
-- No tests, no linter, no CI. Verification means running a demo against a **logged-in WeChat** desktop client; sending/GUI paths additionally need an **unlocked, visible desktop** — they cannot be exercised in a headless environment.
+- Offline reader tests: `python -m unittest discover -s tests -p test_platform_imports.py -v`, `python -m unittest discover -s tests -p test_package_metadata.py -v`, and `python -m unittest discover -s tests -p 'test_linux*.py' -v`. Metadata tests need `packaging`. GitHub Actions runs the reader tests on Linux and upstream pure logic on Windows.
+- Offline tests use synthetic encrypted SQLite and do not log into WeChat or send messages. Live acceptance requires a **logged-in WeChat** desktop client; sending/GUI paths additionally need an **unlocked, visible desktop**. Keep live-client and offline evidence separate; do not run demos as a substitute for offline tests.
 - Install: `pip install -e .`; add `pypinyin` for the pinyin-IME text fallback (`winsdk`, `pyautogui`, `opencv-python`, `zstandard` are already required deps).
 - Run demos from the repo root as `python -m wechatauto.demo_media [chat] [--photos N]`, `python -m wechatauto.demo_moments_download [N] --out DIR`, etc. (all live in `wechatauto/demo_*.py`).
 - Key-extraction failures → run `python -m wechatauto.diagnose_keys` and paste output. Python must be **64-bit**; 32-bit Python cannot read Weixin.exe memory.
@@ -14,6 +17,7 @@ Windows-only automation library for the **WeChat 4.x desktop client** (not web).
 - `wechatauto.wx.Listener` is a backwards-compat abstract stub; the real listener is `wechatauto.db.Listener` (per-chat worker threads, watermark advanced by `sort_seq`).
 - Moments: `MomentDB` reads `sns.db`; **posting Moments is deliberately dropped**; like/comment go through UIA only (`WeChat.Moment`, which is `None` without a hot-activated tree).
 - `real_sender_id` is a rowid into **the row's own shard** `Name2Id` table (`message_N.db`) — *not* `message_resource.db`'s `SenderName2Id`. The same number is a different person in another shard, and the local account's rowid differs per shard (measured 2 / 4 / 1). `db.py` resolves it per shard into `sender_username`; never compare the number against a constant (issue #34). Message type codes are in `db.MSG_TYPE_NAMES` (1 text, 3 image, 34 voice, 43 video, 47 emoji, 49 file).
+- `platforms/linux.py` owns POSIX account binding, secure source snapshots and private cache/key handling. Do not fall back to another account or Windows process scanning on Linux. Public exports are lazy: importing the package or `WeChatDB` must not load a Windows GUI module.
 
 ## State/cache files (the reset knob for "it worked yesterday")
 - `%TEMP%\wechatauto_db\<account>\keys.json` — extracted DB keys (auto re-extracted on re-login).

@@ -111,17 +111,19 @@ class _MODULEENTRY32W(ctypes.Structure):
     ]
 
 
-_k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-_k32.OpenProcess.restype = wintypes.HANDLE
-_k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-_k32.VirtualQueryEx.argtypes = [
-    wintypes.HANDLE, ctypes.c_void_p, ctypes.POINTER(_MBI), ctypes.c_size_t,
-]
-_k32.VirtualQueryEx.restype = ctypes.c_size_t
-_k32.ReadProcessMemory.argtypes = [
-    wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t,
-    ctypes.POINTER(ctypes.c_size_t),
-]
+_k32 = None
+if sys.platform == "win32":
+    _k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _k32.OpenProcess.restype = wintypes.HANDLE
+    _k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    _k32.VirtualQueryEx.argtypes = [
+        wintypes.HANDLE, ctypes.c_void_p, ctypes.POINTER(_MBI), ctypes.c_size_t,
+    ]
+    _k32.VirtualQueryEx.restype = ctypes.c_size_t
+    _k32.ReadProcessMemory.argtypes = [
+        wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t,
+        ctypes.POINTER(ctypes.c_size_t),
+    ]
 
 
 def _md5_hex(data: bytes) -> str:
@@ -532,6 +534,8 @@ def _find_account_dirs(db_dir: str) -> List[str]:
 class WeChatDB:
     """微信 4.x 本地数据库读取器"""
 
+    _linux_reader = None
+
     def __init__(
         self,
         db_dir: Optional[str] = None,
@@ -540,6 +544,12 @@ class WeChatDB:
         account: Optional[str] = None,
         master_key: Optional[str] = None,
     ):
+        self._linux_reader = None
+        if sys.platform != "win32":
+            from wechatauto.platforms.linux import LinuxReader
+            self._linux_reader = LinuxReader(
+                self, db_dir, account, keys_file, workdir, master_key)
+            return
         self.db_dir = db_dir or auto_detect_db_dir()
         if not self.db_dir:
             raise RuntimeError("未找到微信数据库目录，请通过 db_dir 参数手动指定")
@@ -578,6 +588,8 @@ class WeChatDB:
         return candidates[0][1]
 
     def _collect_db_files(self) -> List[Tuple[str, str, int]]:
+        if self._linux_reader is not None:
+            return self._linux_reader.collect()
         files = []
         base = os.path.join(self.account_dir, "db_storage")
         for root, _, names in os.walk(base):
@@ -707,6 +719,9 @@ class WeChatDB:
 
         派生/扫描结果均经 SQLCipher4 页1 HMAC 强校验, 零误报。
         """
+        if self._linux_reader is not None:
+            self._linux_reader.load_keys()
+            return
         if master_key:
             self._keys.update(self.derive_keys_from_master(master_key))
             self.master_key = master_key
@@ -868,8 +883,11 @@ class WeChatDB:
         keys: Dict[str, bytes] = {}
         for rel, path, _ in self._db_files:
             try:
-                with open(path, "rb") as f:
-                    page1 = f.read(PAGE_SZ)
+                if self._linux_reader is not None:
+                    page1 = self._linux_reader.page1(path)
+                else:
+                    with open(path, "rb") as f:
+                        page1 = f.read(PAGE_SZ)
             except OSError:
                 continue
             if len(page1) < PAGE_SZ:
@@ -885,6 +903,8 @@ class WeChatDB:
         遍历微信进程调 extract_master_key_from_cfg; 主密钥可离线派生全部库。
         微信未运行或锚点漂移(版本变更)时返回 None, 由调用方回退。
         """
+        if sys.platform != "win32":
+            raise RuntimeError("Linux 暂不自动提取密钥；请提供 keys_file 或 master_key")
         pids = self._find_weixin_pids()
         for pid in pids:
             got = extract_master_key_from_cfg(pid)
@@ -913,6 +933,8 @@ class WeChatDB:
 
     def extract_keys(self) -> Dict[str, bytes]:
         """从 Weixin.exe 进程内存扫描 Config.Cipher 对象，提取各库密钥"""
+        if sys.platform != "win32":
+            raise RuntimeError("Linux 暂不自动提取密钥；请提供 keys_file 或 master_key")
         pids = self._find_weixin_pids()
         if not pids:
             raise RuntimeError("未检测到 Weixin.exe，请先登录微信再运行")
@@ -1281,6 +1303,9 @@ class WeChatDB:
            不该毁掉已有的好缓存，否则下次再无回退可用；
         2. 原子写入 + 保留 .bak，并同步一份到稳定目录（跨 TEMP 清理/微信更新）。
         """
+        if self._linux_reader is not None:
+            self._linux_reader.load_keys()
+            return
         if not self._keys:
             return
         data = {k: v.hex() for k, v in self._keys.items()}
@@ -1397,6 +1422,8 @@ class WeChatDB:
         - 主库被 checkpoint 改写（mtime/size 变化）或 WAL 被重置 → 全量重建；
         - 仅 WAL 追加了新帧 → 增量合并新帧（秒级）。
         """
+        if self._linux_reader is not None:
+            return self._linux_reader.open(rel)
         if rel not in self._keys:
             self._auto_diagnose_key_failure(rel)
             raise RuntimeError(
@@ -1629,6 +1656,9 @@ class WeChatDB:
         性能：仅当 message 目录下的文件清单有变化（新增 message_5.db 等）或首次
         调用时才做全量重扫，否则直接复用 __init__ 时的扫描结果。
         """
+        if self._linux_reader is not None:
+            self._linux_reader.refresh()
+            return
         msg_dir = os.path.join(self.account_dir, "db_storage", "message")
         try:
             cur = sorted(
@@ -1681,6 +1711,9 @@ class WeChatDB:
 
         下一次 _open 会对每份库全量解密重建。media 图片等副产物不受影响。
         """
+        if self._linux_reader is not None:
+            self._linux_reader.invalidate()
+            return
         try:
             names = os.listdir(self.workdir)
         except OSError:
@@ -1839,7 +1872,9 @@ class WeChatDB:
         except (TypeError, ValueError):
             return ""
         for rel in self._message_dbs():
-            if rel.replace(os.sep, "__") != shard:
+            cache_name = (self._linux_reader.cache_name(rel) if self._linux_reader is not None
+                          else rel.replace(os.sep, "__"))
+            if cache_name != shard:
                 continue
             conn = self._open(rel)
             try:
@@ -2865,6 +2900,9 @@ def list_accounts(db_dir: Optional[str] = None) -> List[dict]:
     返回: [{"account": "wxid_xxx_abcd", "wxid": "wxid_xxx",
             "path": ..., "last_activity": mtime, "self_nick": 昵称或空}]
     """
+    if sys.platform != "win32":
+        from wechatauto.platforms.linux import list_accounts as linux_accounts
+        return linux_accounts(db_dir)
     db_dir = db_dir or auto_detect_db_dir()
     if not db_dir:
         return []
@@ -2979,6 +3017,9 @@ class Listener:
             except Exception:
                 watermark_file = ""
         self.watermark_file = watermark_file or ""
+        linux_reader = getattr(db, "_linux_reader", None)
+        if linux_reader is not None and self.watermark_file:
+            self.watermark_file = linux_reader.watermark_path(self.watermark_file)
         self._watermark: Dict[str, int] = dict(watermark or {})
         if self.watermark_file:
             self._load_watermark()
@@ -3001,8 +3042,13 @@ class Listener:
         if not path or not os.path.exists(path):
             return
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            if getattr(self.db, "_linux_reader", None) is not None:
+                from wechatauto.platforms.linux import _read_file
+                with _read_file(path) as f:
+                    data = json.load(f)
+            else:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
         except Exception:
             return
         if not isinstance(data, dict):
@@ -3026,6 +3072,12 @@ class Listener:
         with self._wm_lock:
             payload = dict(self._watermark)
             self._last_persist = now
+        linux_reader = getattr(self.db, "_linux_reader", None)
+        if linux_reader is not None and os.path.dirname(path) == self.db.workdir:
+            linux_reader.write_private(
+                linux_reader.workdir / os.path.basename(path),
+                json.dumps(payload, ensure_ascii=False, indent=0).encode("utf-8"))
+            return
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
             tmp = path + ".tmp"
@@ -3340,6 +3392,9 @@ def auto_detect_db_dir() -> Optional[str]:
       2. 注册表；
       3. 常见默认目录（Documents / 用户主目录）。
     """
+    if sys.platform != "win32":
+        from wechatauto.platforms.linux import discover
+        return discover()
     # 1) 配置文件
     for cfg_dir in _config_candidates():
         if not os.path.isdir(cfg_dir):
