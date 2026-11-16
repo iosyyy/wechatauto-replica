@@ -1,0 +1,12 @@
+NativeWeChatStyle includes the exact locally maintained LangBot StickerHub
+chat_style.py, chat_style.yaml, and their existing behavioral tests from:
+https://github.com/langbot-app/LangBot
+plugins/misc/StickerHub/
+
+The copied files retain their existing behavior without modification. They
+include previously authorized local persona/style changes. SOURCE.json records
+the local checkout revision and exact source hashes. LangBot is distributed
+under Apache License 2.0; see UPSTREAM-LICENSE.txt.
+
+This package adds only a minimal plugin wrapper, manifest, test fixture, and
+documentation. It does not include StickerHub tools or image sending.

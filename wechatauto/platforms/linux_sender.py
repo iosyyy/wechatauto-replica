@@ -194,6 +194,7 @@ class DesktopLayout:
     header_aliases: Optional[Mapping[str, str]] = None
     chat_row: Optional[Selector] = None
     composer_input_mode: str = "clipboard"
+    reuse_verified_controls: bool = False
 
 
 class AgentDesktopDriver:
@@ -213,6 +214,9 @@ class AgentDesktopDriver:
             raise ValueError("Unsupported composer_input_mode")
         if layout.composer_input_mode == "set_value" and layout.input_mode != "clipboard_coordinates":
             raise ValueError("set_value composer input requires the clipboard_coordinates search route")
+        if type(layout.reuse_verified_controls) is not bool or (layout.reuse_verified_controls and
+                (layout.composer_input_mode != "set_value" or layout.activation_mode != "focused_return")):
+            raise ValueError("Control reuse requires explicit semantic input and focused Return")
         if layout.header_aliases is not None and (not isinstance(layout.header_aliases, Mapping)
                 or dict(layout.header_aliases) not in ({}, {"filehelper": "File Transfer"})):
             raise ValueError("Only the observed filehelper system header alias is supported")
@@ -229,6 +233,7 @@ class AgentDesktopDriver:
         self.allow_physical = allow_physical
         self._runner = run or self._run_process
         self._coordinate_process = None
+        self._prepared = None
 
     def _run_process(self, args, stdin=None):
         try:
@@ -265,6 +270,10 @@ class AgentDesktopDriver:
         data = self._command(args)
         if data.get("complete") is not True or data.get("identity_unproven"):
             raise LinuxSenderError("INCOMPLETE_TREE", "Complete accessibility identity is required")
+        for node in self._nodes(data.get("tree", {})):
+            name = node.get("name")
+            if isinstance(name, str) and " ".join(name.split()).casefold() in ("login", "log in", "登录"):
+                raise LinuxSenderError("LOGIN_VISIBLE", "Login state cannot accept message input")
         return data
 
     def _snapshot(self, wait_for=None):
@@ -296,7 +305,7 @@ class AgentDesktopDriver:
             raise LinuxSenderError("WRONG_CONVERSATION", "Conversation header was not verified")
         ref_required = self.layout.input_mode != "clipboard_coordinates" \
             and self.layout.activation_mode != "observed_coordinates"
-        return (self._one(tree, self.layout.composer, target, actionable=ref_required),
+        return (self._one(tree, self.layout.composer, header_target, actionable=ref_required),
                 self._one(tree, self.layout.send, target, actionable=ref_required))
 
     def _header_target(self, target):
@@ -480,6 +489,12 @@ class AgentDesktopDriver:
             self._clipboard_fill(self.layout.composer, target, text)
             return
         self._action("set-value", composer["ref_id"], stdin=text)
+        if self.layout.reuse_verified_controls:
+            if self._value(composer, force_get=True) != text:
+                raise LinuxSenderError("TEXT_MISMATCH", "Composer text did not match the requested text")
+            _, send = self._chat_controls(tree, target)
+            self._prepared = (target, hashlib.sha256(text.encode()).digest(), composer, send)
+            return
         updated, _ = self._coordinate_view()
         composer, _ = self._chat_controls(updated, target)
         if self._value(composer, force_get=True) != text:
@@ -550,7 +565,7 @@ class AgentDesktopDriver:
 
     def _chat_ready_selector(self, target):
         if self.layout.composer.name:
-            name = self.layout.composer.name.replace("{title}", target.title)
+            name = self.layout.composer.name.replace("{title}", self._header_target(target).title)
             name = name.replace("{header_title}", self._header_target(target).title)
             return self.layout.composer.role + ":" + name
         title = self._header_target(target).title
@@ -561,6 +576,13 @@ class AgentDesktopDriver:
         tree, _ = self._focus_main()
         if self._has_unique_target_header(tree, target):
             self._require_closed_popups()
+        elif self.layout.reuse_verified_controls and self.layout.chat_row is not None and any(
+                self.layout.chat_row.matches(node, self._header_target(target))
+                for node in self._nodes(tree, ("hidden", "offscreen"))):
+            # 最近会话身份已由精确 username 和昵称碰撞校验绑定，避免全局搜索混入同名历史结果。
+            self._coordinate_click(self.layout.chat_row, self._header_target(target),
+                                   before_click=self._require_closed_popups, require_first_line=True)
+            tree, _ = self._coordinate_view(wait_for=self._chat_ready_selector(target))
         else:
             self._clipboard_fill(self.layout.search, target, target.title, replace=True)
             popup = self._popup_result(target)
@@ -607,6 +629,7 @@ class AgentDesktopDriver:
         return send
 
     def prepare_text(self, target: Target, text: str):
+        self._prepared = None
         if self.layout.input_mode == "clipboard_coordinates":
             self._prepare_coordinates(target, text)
             return
@@ -635,6 +658,17 @@ class AgentDesktopDriver:
             raise LinuxSenderError("TEXT_MISMATCH", "Composer text did not match the requested text")
 
     def submit_text(self, target: Target, text: str, *, before_submit=None):
+        if self.layout.reuse_verified_controls:
+            prepared, self._prepared = self._prepared, None
+            if prepared is None or prepared[0] != target or prepared[1] != hashlib.sha256(text.encode()).digest():
+                raise LinuxSenderError("PREPARATION_MISMATCH", "Submission must match this preparation exactly")
+            if self._value(prepared[2], force_get=True) != text:
+                raise LinuxSenderError("TEXT_MISMATCH", "Prepared composer text changed")
+            # focus 只重新定位控件；慢账号回调后仍以新的完整树校验会话、正文和焦点再提交。
+            self._activate(prepared[3], self.layout.send, target, before_activate=before_submit,
+                           validate_tree=lambda tree: self._pending_text(tree, target, text))
+            # 提交后不再遍历整棵树，唯一送达证据仍是 LinuxSender 的正数 server_id 回读。
+            return
         send = self._pending_text(self._snapshot(), target, text)
         self._activate(send, self.layout.send, target, before_activate=before_submit,
                        validate_tree=lambda tree: self._pending_text(tree, target, text))

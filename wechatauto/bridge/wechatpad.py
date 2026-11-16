@@ -14,6 +14,7 @@ from aiohttp import WSMsgType, web
 from aiohttp.abc import AbstractAccessLogger
 
 from .journal import ConflictError, _identifier, _json
+from . import history
 
 
 MAX_HTTP_BYTES = 12 * 1024 * 1024
@@ -109,7 +110,7 @@ def _send_request(body, kind):
     return client_id, {"kind": kind, "to": to, "content": content, "ats": ats}
 
 
-def create_app(backend, journal, token):
+def create_app(backend, journal, token, *, history_config=None):
     """创建已鉴权的 aiohttp Application，不启动服务或读取账号。
 
     backend 是同步接口：profile()->{wxid,nickname}，is_logged_in()->bool，
@@ -120,6 +121,7 @@ def create_app(backend, journal, token):
     通过 create_app 配置的访问日志不包含 URL/query。部署反向代理同样必须关闭 query 日志。
     """
     _string(token, "token", maximum=4096)
+    history_config = history.validate_history_config(history_config, token)
     secret = token.encode("utf-8")
     send_lock = asyncio.Lock()
     tasks = set()
@@ -127,7 +129,11 @@ def create_app(backend, journal, token):
 
     @web.middleware
     async def authenticate(request, handler):
-        if request.path != "/health":
+        if request.path.startswith("/native-history/"):
+            failure = history.authorize(request, history_config)
+            if failure is not None:
+                return failure
+        elif request.path != "/health":
             values = request.query.getall("key", [])
             supplied = values[0].encode("utf-8") if len(values) == 1 else b""
             if not hmac.compare_digest(secret, supplied):
@@ -283,6 +289,8 @@ def create_app(backend, journal, token):
     app.router.add_post("/chatroom/GetChatRoomMemberDetail", members)
     app.router.add_get("/ws/GetSyncMsg", sync)
     app.router.add_get("/GetSyncMsg", sync)
+    if history_config is not None:
+        history.register_routes(app, backend, history_config)
     app.router.add_route("*", "/{tail:.*}", unsupported)
     app.on_shutdown.append(shutdown)
     return app
