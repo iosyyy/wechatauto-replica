@@ -16,7 +16,7 @@ start a GUI, or read a second history database.
 
 - Python 3.9 or newer and the existing `linux-bridge` optional dependencies.
 - A native AgentWeChat daemon already authenticated to the intended account.
-- Use the reviewed [maintained protocol fork](https://github.com/iosyyy/agent-wechat)
+- Use the reviewed [maintained protocol branch](https://github.com/iosyyy/agent-wechat/tree/codex/langbot-protocol-backend)
   with the profile-ownership and media safety fixes. Before login, set the account's
   `autoDownloadMaxBytes` to `0`. That policy disables automatic thumbnails and voice
   downloads too. Authenticated CDN media transfers remain unavailable in this fork
@@ -88,10 +88,20 @@ arguments. Configuration is validated before the listener starts. Existing
 health, login, profile, send, member, and WebSocket routes are provided by
 `wechatpad.create_app`.
 
+The gateway listener starts only after the daemon account passes the existing
+readiness checks and the first event poll completes. Account restoration,
+contact catch-up, or a retained-cursor failure keeps startup pending without
+opening a gateway port. This lets LangBot's existing connection retry survive
+host startup without receiving a premature logged-out or unavailable response.
+The daemon's administrative API remains independent and available for login/QR
+operations. There is no startup bypass switch. Cancelling startup, including
+before the HTTP application becomes ready, drains any in-flight bounded daemon
+request asynchronously, then closes the backend and releases the journal lock.
+
 ## Incoming messages and startup
 
 The bridge consumes bounded JSON pages from
-`GET /v1/accounts/{account}/events?after=...&limit=...`. Its first verified poll
+`GET /v1/accounts/{account}/events?after=...&limit=...`. By default, its first verified poll
 reads a one-item profile thread page and persists that page's atomic
 `asOfEventCursor` as its startup baseline. It then immediately reads events
 **after that exact cursor**, rather than taking another end-of-log snapshot.
@@ -100,9 +110,9 @@ therefore retained. Events at or before the first baseline are startup history
 and are deliberately excluded. Reopening the same journal resumes its committed
 cursor and does not take a new baseline.
 
-Only `message.committed` events with `origin: "live"` can become LangBot requests.
-Catch-up records, local-send events, non-text messages, and recalled messages do
-not enter the model. The referenced saved message is read by its opaque ID and
+In the default mode, only `message.committed` events with `origin: "live"` can
+become LangBot requests. Catch-up records, local-send events, non-text messages,
+and recalled messages do not enter the model. The referenced saved message is read by its opaque ID and
 checked against the exact account, event thread, message ID, sender, and direction.
 
 - Allowed direct chats accept incoming messages from that exact peer, including
@@ -131,6 +141,53 @@ The upstream event log retains approximately 10,000 events, so monitor outages
 and retained cursor age. A journal is bound to protocol version, daemon origin,
 daemon data-directory ID, account, and own username; a GUI journal or another
 account's journal is rejected.
+
+### Optional controlled handoff and catch-up
+
+For an explicitly coordinated handoff, configure both of these optional fields:
+
+```json
+{
+  "initial_event_cursor": "CAPTURED_DECIMAL_EVENT_CURSOR",
+  "incoming_since": 1767225600
+}
+```
+
+The cursor placeholder and timestamp above are illustrative; capture both real
+values for the handoff. Drain the previous responder's pending journal and pause
+that responder before recording `incoming_since`. Capture the new daemon account's
+current event cursor **before its first login or incoming sync**, following bounded
+event pages to the end if needed. Use a fresh protocol journal. The timestamp is
+the positive integer UTC Unix second at the previous responder's quiesce boundary;
+it must not be more than 300 seconds ahead of the bridge clock. The cursor must be
+a decimal string between zero and the signed 64-bit maximum. Providing only one
+field, a non-integer timestamp, or invalid bounds is rejected.
+
+In this mode, a fresh journal starts at `initial_event_cursor` and does not take a
+later end-of-log/catalog snapshot. Messages committed between cursor capture,
+login, and the first poll remain eligible. Both `live` and `catchup` committed
+messages can enter the existing account, allowlist, type, direction, and prefix
+gates, but their saved creation timestamp must be **greater than or equal to
+`incoming_since`**. Copied prompts with earlier creation times are discarded for
+both origins. `local_send` echoes remain excluded, including prefixed file-transfer
+messages. The cutoff does not filter canonical history reads or inspect model
+answers or tool choices.
+
+The cutoff is inclusive because message timestamps have second granularity. It
+preserves legitimate arrivals in the cutoff second, but cannot distinguish an
+older prompt created in that same second. A message delivered later with an
+earlier saved timestamp is excluded; the bridge does not infer clock corrections.
+Keep source clocks synchronized and coordinate the old responder's pause/drain.
+
+Both configuration values are bound into the protocol source identity. Keep them
+unchanged on subsequent restarts: the bridge resumes its durable committed cursor,
+never resets it to the initial value, and accepts genuinely new eligible catch-up
+messages after an offline period. Changing either value, removing the pair, or
+reusing a default-mode journal is rejected as a source mismatch. Without either
+field, the original source identity and default live-only/catalog-baseline behavior
+remain unchanged. The approximately 10,000-event upstream retention limit still
+applies; an expired retained cursor fails closed and keeps startup pending rather
+than silently skipping the gap.
 
 ## Send confirmation and uncertain outcomes
 
@@ -194,6 +251,12 @@ These tests use synthetic loopback HTTP daemons and real private SQLite journals
 They cover startup arrivals, exact account/allowlist checks, live/catch-up filtering,
 transaction rollback before daemon ACK, journal restart, final send receipts,
 uncertain-send deduplication, independent history authorization, and WebSocket ACK.
+Runtime tests also verify that application setup stays pending before account
+readiness, completes after readiness with an immediate baseline poll, and releases
+resources when cancelled during startup.
+Controlled replay tests cover paired-config validation, the pre-login cursor gap,
+old-record exclusion, new catch-up deduplication across journal reopen, immutable
+cutoff binding, unchanged history, and local-send echo exclusion.
 They do not prove real login, protocol compatibility with a running WeChat account,
 recipient delivery, LangBot model execution, or improved live latency.
 

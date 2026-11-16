@@ -3,6 +3,7 @@
 import asyncio
 from copy import deepcopy
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import hashlib
 import importlib
 import json
 import os
@@ -14,6 +15,7 @@ import time
 import unittest
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from aiohttp import ClientSession, web
 from aiohttp.test_utils import TestClient, TestServer
 
 from wechatauto.bridge.journal import ConflictError, Journal
@@ -43,6 +45,7 @@ class FakeDaemon:
         self.intent_overrides = {}
         self.self_contact_status = 200
         self.event_page_override = None
+        self.event_status = 200
         self.accounts = {"id": "account", "ownUsername": "wxid_self", "authenticated": True,
                          "connection": "online", "incomingTransport": "native_push",
                          "contactSyncReady": True, "nativeRuntime": True,
@@ -104,6 +107,9 @@ class FakeDaemon:
                     self.reply(200, {"items": [], "nextCursor": None, "sourceGeneration": "profile-1",
                                      "asOfEventCursor": boundary, "coverage": {}})
                 elif path == prefix + "/events":
+                    if daemon.event_status != 200:
+                        self.reply(daemon.event_status, {"error": {"code": "event_cursor_expired"}})
+                        return
                     after, limit = int(query["after"][0]), int(query["limit"][0])
                     items = daemon.events[after:after + limit]
                     self.reply(200, daemon.event_page_override or {
@@ -183,7 +189,7 @@ def message(identifier="opaque/id", chat="wxid_owner", sender="wxid_owner", body
 
 
 class Fixture:
-    def setup_fixture(self):
+    def setup_fixture(self, config_overrides=None):
         self.assertIsNotNone(adapter, "AgentWeChat backend is missing")
         self.tmp = tempfile.TemporaryDirectory()
         self.daemon = FakeDaemon()
@@ -197,6 +203,7 @@ class Fixture:
                        "write_chats": ["filehelper", "wxid_owner", "room@chatroom"],
                        "request_prefix": "/lb ", "group_request_prefix": "/lb ",
                        "send_confirm_timeout": .2, "send_poll_interval": .01, "event_page_size": 3}
+        self.config.update(config_overrides or {})
         self.journal = Journal(Path(self.tmp.name) / "journal")
         self.backend = adapter.AgentWeChatBackend(self.config, self.journal)
 
@@ -214,6 +221,12 @@ class AgentWeChatTests(Fixture, unittest.TestCase):
 
     def tearDown(self):
         self.close_fixture()
+
+    def test_default_source_identity_keeps_the_original_journal_namespace(self):
+        source = ["agent-wechat-v1", self.daemon.url, "daemon-source", "account", "wxid_self"]
+        encoded = json.dumps(source, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        expected = "agent-wechat-v1:" + hashlib.sha256(encoded.encode()).hexdigest()
+        self.assertEqual(self.backend.source_identity, expected)
 
     def test_profile_pins_native_daemon_and_exact_account(self):
         self.assertEqual(self.backend.profile(), {"wxid": "wxid_self", "nickname": "Assistant"})
@@ -445,6 +458,187 @@ class AgentWeChatTests(Fixture, unittest.TestCase):
         self.daemon.member_pages.append([{"id": "member2", "username": "member2", "displayName": None}])
         self.assertEqual(self.backend.chatroom_members("room@chatroom"), [
             {"user_name": "member", "nick_name": "Member"}, {"user_name": "member2", "nick_name": "member2"}])
+
+
+class ControlledReplayTests(Fixture, unittest.TestCase):
+    def setUp(self):
+        self.setup_fixture({"initial_event_cursor": "0", "incoming_since": 1767225600})
+
+    def tearDown(self):
+        self.close_fixture()
+
+    def test_old_live_and_catchup_are_dropped_and_new_catchup_is_durable_once_across_restart(self):
+        for identifier, origin in (("old-live", "live"), ("old-catchup", "catchup")):
+            self.daemon.add_message({**message(identifier), "createdAt": "2025-12-31T23:59:59Z"}, origin)
+        self.daemon.add_message(message("at-cutoff"), "catchup")
+        self.assertEqual(self.backend.poll_once(), 1)
+        self.assertEqual(len(self.journal.unacked()), 1)
+        first_event_id = self.journal.unacked()[0]["event_id"]
+        self.backend.close()
+        self.journal.close()
+        self.journal = Journal(Path(self.tmp.name) / "journal")
+        self.backend = adapter.AgentWeChatBackend(self.config, self.journal)
+        self.assertEqual(self.backend.poll_once(), 0)
+        self.assertEqual(self.journal.unacked()[0]["event_id"], first_event_id)
+        self.daemon.add_message({**message("after-restart"), "createdAt": "2026-01-01T00:00:01Z"}, "catchup")
+        self.assertEqual(self.backend.poll_once(), 1)
+        self.daemon.add_message(message("at-cutoff"), "catchup")
+        self.backend.poll_once()
+        self.assertEqual(len(self.journal.unacked()), 2)
+        self.assertEqual(len({row["event_id"] for row in self.journal.unacked()}), 2)
+        self.assertEqual(self.journal.get_cursor(adapter.CURSOR_CHAT, adapter.CURSOR_SHARD), 5)
+        self.assertFalse(any(row[1].endswith("/threads") for row in self.daemon.requests))
+
+    def test_configured_cursor_survives_login_delay_and_precedes_first_poll(self):
+        self.backend.close()
+        self.journal.close()
+        self.config["initial_event_cursor"] = "2"
+        self.journal = Journal(Path(self.tmp.name) / "handoff-journal")
+        self.backend = adapter.AgentWeChatBackend(self.config, self.journal)
+        for identifier in ("before-capture-1", "before-capture-2"):
+            self.daemon.add_message(message(identifier), "catchup")
+        self.daemon.accounts["authenticated"] = False
+        self.assertRaises(RuntimeError, self.backend.poll_once)
+        self.assertIsNone(self.journal.get_cursor(adapter.CURSOR_CHAT, adapter.CURSOR_SHARD))
+        self.daemon.add_message(message("during-login"), "catchup")
+        self.daemon.accounts["authenticated"] = True
+        self.assertEqual(self.backend.poll_once(), 1)
+        self.assertEqual(len(self.journal.unacked()), 1)
+        queries = [row[2] for row in self.daemon.requests if row[1].endswith("/events")]
+        self.assertEqual(queries[0]["after"], ["2"])
+        self.assertEqual(self.journal.get_cursor(adapter.CURSOR_CHAT, adapter.CURSOR_SHARD), 3)
+        self.assertFalse(any(row[1].endswith("/threads") for row in self.daemon.requests))
+
+    def test_replay_options_require_a_valid_pair(self):
+        base = {key: value for key, value in self.config.items()
+                if key not in ("initial_event_cursor", "incoming_since")}
+        invalid = [
+            {"initial_event_cursor": "0"}, {"incoming_since": 1767225600},
+            {"initial_event_cursor": 0, "incoming_since": 1767225600},
+            {"initial_event_cursor": "-1", "incoming_since": 1767225600},
+            {"initial_event_cursor": "1e0", "incoming_since": 1767225600},
+            {"initial_event_cursor": str(2 ** 63), "incoming_since": 1767225600},
+            {"initial_event_cursor": "0", "incoming_since": True},
+            {"initial_event_cursor": "0", "incoming_since": 1.5},
+            {"initial_event_cursor": "0", "incoming_since": 0},
+            {"initial_event_cursor": "0", "incoming_since": int(time.time()) + 3600},
+        ]
+        for options in invalid:
+            with self.subTest(options=options), self.assertRaises(ValueError):
+                adapter.validate_config({**base, **options})
+        normalized = adapter.validate_config({**self.config, "initial_event_cursor": "0002"})
+        self.assertEqual(normalized["initial_event_cursor"], "2")
+
+    def test_replay_cutoff_and_initial_cursor_are_bound_to_the_journal_source(self):
+        for changes in ({"incoming_since": 1767225601}, {"initial_event_cursor": "1"}):
+            with self.subTest(changes=changes), self.assertRaises(ConflictError):
+                adapter.AgentWeChatBackend({**self.config, **changes}, self.journal)
+        original_default = {key: value for key, value in self.config.items()
+                            if key not in ("initial_event_cursor", "incoming_since")}
+        with self.assertRaises(ConflictError):
+            adapter.AgentWeChatBackend(original_default, self.journal)
+
+    def test_catchup_retains_allowlist_direction_and_prefix_gates_and_excludes_local_echo(self):
+        cases = [
+            (message("local", chat="filehelper", sender="wxid_self", body="/lb echo", direction="outgoing"), "local_send"),
+            (message("outside", chat="wxid_other", sender="wxid_other"), "catchup"),
+            (message("outgoing", chat="wxid_owner", sender="wxid_self", direction="outgoing"), "catchup"),
+            (message("no-prefix", chat="room@chatroom", sender="member"), "catchup"),
+            (message("group", chat="room@chatroom", sender="member", body="/lb group"), "catchup"),
+            (message("helper", chat="filehelper", sender="wxid_self", body="/lb helper", direction="outgoing"), "catchup"),
+        ]
+        for value, origin in cases:
+            self.daemon.add_message(value, origin)
+        self.assertEqual(sum(self.backend.poll_once() for _ in range(2)), 2)
+        self.assertEqual([row["payload"]["content"]["str"] for row in self.journal.unacked()],
+                         ["member:\n/lb group", "helper"])
+
+    def test_history_still_returns_records_older_than_the_routing_cutoff(self):
+        self.daemon.history = [{**message("old-history", chat="room@chatroom", sender="member"),
+                                "createdAt": "2025-12-31T23:59:59Z"}]
+        rows = self.backend.get_history("room@chatroom")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["create_time"], 1767225599)
+
+    def test_expired_replay_cursor_does_not_reset_or_ack_past_the_gap(self):
+        self.backend.poll_once()
+        self.daemon.add_message(message("while-offline"), "catchup")
+        self.daemon.event_status = 409
+        with self.assertRaises(RuntimeError):
+            self.backend.poll_once()
+        self.assertEqual(self.journal.get_cursor(adapter.CURSOR_CHAT, adapter.CURSOR_SHARD), 0)
+        self.assertEqual(self.daemon.acks, ["0"])
+        self.assertEqual(self.journal.unacked(), [])
+        self.assertFalse(any(row[1].endswith("/threads") for row in self.daemon.requests))
+        self.daemon.event_status = 200
+        self.assertEqual(self.backend.poll_once(), 1)
+
+
+class RuntimeStartupTests(Fixture, unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.setup_fixture()
+        self.daemon.accounts["contactSyncReady"] = False
+        config = {**self.config, "poll_interval": .1}
+        self.runner = web.AppRunner(adapter.create_runtime_app(config, backend=self.backend, journal=self.journal))
+        self.startup = asyncio.create_task(self.runner.setup())
+
+    async def asyncTearDown(self):
+        if not self.startup.done():
+            self.startup.cancel()
+        await asyncio.gather(self.startup, return_exceptions=True)
+        await self.runner.cleanup()
+        await asyncio.to_thread(self.close_fixture)
+
+    async def wait_for_request(self, path):
+        async def observed():
+            while not any(request[1] == path for request in self.daemon.requests):
+                await asyncio.sleep(.005)
+
+        await asyncio.wait_for(observed(), 2)
+
+    def assert_journal_released(self):
+        reopened = Journal(Path(self.tmp.name) / "journal")
+        reopened.close()
+
+    async def test_setup_waits_for_verified_account_before_listener_and_captures_baseline(self):
+        await self.wait_for_request("/v1/accounts/account")
+        self.assertFalse(self.startup.done())
+        self.assertIsNone(self.runner.server)
+        self.assertFalse(self.runner.sites)
+        self.assertIsNone(self.journal.get_cursor(adapter.CURSOR_CHAT, adapter.CURSOR_SHARD))
+        self.daemon.extra_events_on_baseline = [(message("during-startup-baseline"), "live")]
+        self.daemon.accounts["contactSyncReady"] = True
+        await asyncio.wait_for(self.startup, 3)
+        self.assertEqual(self.journal.get_cursor(adapter.CURSOR_CHAT, adapter.CURSOR_SHARD), 1)
+        self.assertEqual(len(self.journal.unacked()), 1)
+        site = web.TCPSite(self.runner, "127.0.0.1", 0)
+        await site.start()
+        port = site._server.sockets[0].getsockname()[1]
+        async with ClientSession() as client:
+            response = await client.get("http://127.0.0.1:%d/health" % port)
+            self.assertEqual(response.status, 200)
+            self.assertTrue((await response.json())["ready"])
+
+    async def test_cancelled_setup_closes_backend_and_releases_journal_before_first_yield(self):
+        await self.wait_for_request("/v1/accounts/account")
+        self.assertFalse(self.startup.done())
+        self.startup.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await self.startup
+        self.assertTrue(self.backend._closed)
+        self.assert_journal_released()
+
+    async def test_cancelled_setup_drains_inflight_http_without_blocking_the_event_loop(self):
+        self.daemon.delay = .2
+        await self.wait_for_request("/v1/status")
+        started = time.monotonic()
+        self.startup.cancel()
+        await asyncio.sleep(.02)
+        self.assertLess(time.monotonic() - started, .15)
+        with self.assertRaises(asyncio.CancelledError):
+            await self.startup
+        self.assertTrue(self.backend._closed)
+        self.assert_journal_released()
 
 
 class GatewayContractTests(Fixture, unittest.IsolatedAsyncioTestCase):

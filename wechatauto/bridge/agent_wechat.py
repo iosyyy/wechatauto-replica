@@ -107,7 +107,7 @@ def validate_config(value):
     fields = {"daemon_url", "daemon_token_file", "account", "expected_wxid", "expected_server_id",
               "state_dir", "token", "allowed_chats", "write_chats", "request_prefix", "group_request_prefix",
               "native_history", "listen_host", "port", "poll_interval", "request_timeout", "send_confirm_timeout",
-              "send_poll_interval", "event_page_size"}
+              "send_poll_interval", "event_page_size", "initial_event_cursor", "incoming_since"}
     if not isinstance(value, dict) or set(value) - fields:
         raise ValueError("invalid AgentWeChat configuration fields")
     config = dict(value)
@@ -122,6 +122,15 @@ def validate_config(value):
     config["expected_server_id"] = _exact(config.get("expected_server_id"), "expected_server_id")
     config["token"] = _exact(config.get("token"), "bridge token", MAX_TOKEN_BYTES)
     config["native_history"] = validate_history_config(config.get("native_history"), config["token"])
+    replay_options = {"initial_event_cursor", "incoming_since"} & config.keys()
+    if replay_options and len(replay_options) != 2:
+        raise ValueError("initial_event_cursor and incoming_since must be configured together")
+    if replay_options:
+        try:
+            config["initial_event_cursor"] = str(_decimal(config["initial_event_cursor"]))
+        except AgentWeChatError:
+            raise ValueError("invalid initial_event_cursor") from None
+        _number(config["incoming_since"], "incoming_since", 1, int(time.time()) + 300, integer=True)
     for name in ("allowed_chats", "write_chats"):
         entries = config.get(name)
         if not isinstance(entries, list) or not 1 <= len(entries) <= 100:
@@ -193,6 +202,8 @@ class AgentWeChatBackend:
             raise ValueError("daemon, bridge and history tokens must be distinct")
         source = ["agent-wechat-v1", self.config["daemon_url"], self.config["expected_server_id"],
                   self.config["account"], self.config["expected_wxid"]]
+        if "incoming_since" in self.config:
+            source.append(["controlled-replay-v1", self.config["initial_event_cursor"], self.config["incoming_since"]])
         self.source_identity = "agent-wechat-v1:" + hashlib.sha256(_json(source).encode()).hexdigest()
         journal.bind_identity(self.source_identity)
         self.lock = threading.RLock()
@@ -396,7 +407,8 @@ class AgentWeChatBackend:
 
     def _inbound(self, event):
         data = event["data"]
-        if event["kind"] != "message.committed" or data.get("origin") != "live":
+        origins = ("live", "catchup") if "incoming_since" in self.config else ("live",)
+        if event["kind"] != "message.committed" or data.get("origin") not in origins:
             return None
         if data.get("accountId", self.config["account"]) != self.config["account"]:
             raise AgentWeChatError("AGENT_WECHAT_MESSAGE_MISMATCH")
@@ -429,9 +441,12 @@ class AgentWeChatBackend:
                 raise AgentWeChatError("AGENT_WECHAT_MESSAGE_MISMATCH")
         if not body.strip():
             return None
+        created = _timestamp(value.get("createdAt"))
+        if "incoming_since" in self.config and created < self.config["incoming_since"]:
+            return None
         event_id = hashlib.sha256(_json([self.source_identity, identifier]).encode()).hexdigest()
         return encode_native_record({"username": thread, "sender_username": sender, "content": body,
-                                     "type": 1, "create_time": _timestamp(value.get("createdAt")),
+                                     "type": 1, "create_time": created,
                                      "server_id": value.get("serverId")}, own, event_id)
 
     def poll_once(self):
@@ -440,8 +455,11 @@ class AgentWeChatBackend:
             self._ready()
             cursor = self.journal.get_cursor(CURSOR_CHAT, CURSOR_SHARD)
             if cursor is None:
-                page = self._page(self._base + "/threads", 1)
-                cursor = _decimal(page.get("asOfEventCursor"))
+                if "initial_event_cursor" in self.config:
+                    cursor = _decimal(self.config["initial_event_cursor"])
+                else:
+                    page = self._page(self._base + "/threads", 1)
+                    cursor = _decimal(page.get("asOfEventCursor"))
                 self.journal.record_observation(CURSOR_CHAT, CURSOR_SHARD, cursor)
             page = self._request("GET", self._base + "/events", query={"after": str(cursor),
                                   "limit": self.config["event_page_size"]})
@@ -543,7 +561,7 @@ JOURNAL_KEY = web.AppKey("agent_wechat_journal", Journal)
 
 
 def create_runtime_app(config, *, backend=None, journal=None):
-    """创建现有兼容网关，轮询同一协议后端并由 cleanup 统一关闭。"""
+    """账号验证和首次事件轮询完成后才允许监听，启动取消也统一关闭资源。"""
     config = validate_config(config)
     if journal is None:
         journal = backend.journal if backend is not None else Journal(Path(config["state_dir"]) / "journal")
@@ -560,12 +578,22 @@ def create_runtime_app(config, *, backend=None, journal=None):
 
     async def lifetime(application):
         stopped = asyncio.Event()
+        task = operation = None
+
+        async def execute(method):
+            nonlocal operation
+            operation = asyncio.create_task(asyncio.to_thread(method))
+            try:
+                return await asyncio.shield(operation)
+            finally:
+                if operation.done():
+                    operation = None
 
         async def poll():
-            available = None
+            available = True
             while not stopped.is_set():
                 try:
-                    await asyncio.to_thread(backend.poll_once)
+                    await execute(backend.poll_once)
                     if available is not True:
                         logger.info("AgentWeChat bridge reader ready")
                     available = True
@@ -578,14 +606,36 @@ def create_runtime_app(config, *, backend=None, journal=None):
                 except asyncio.TimeoutError:
                     pass
 
-        task = asyncio.create_task(poll())
         try:
+            waiting = False
+            while True:
+                try:
+                    if await execute(backend.is_logged_in) is True:
+                        await execute(backend.poll_once)
+                        break
+                except Exception:
+                    pass
+                if not waiting:
+                    logger.warning("AgentWeChat bridge startup is waiting for a verified account and cursor")
+                    waiting = True
+                await asyncio.sleep(config["poll_interval"])
+            logger.info("AgentWeChat bridge reader ready")
+            task = asyncio.create_task(poll())
             yield
         finally:
             stopped.set()
-            await task
-            backend.close()
-            journal.close()
+            try:
+                if task is not None:
+                    await task
+            finally:
+                try:
+                    if operation is not None:
+                        await asyncio.gather(operation, return_exceptions=True)
+                finally:
+                    try:
+                        backend.close()
+                    finally:
+                        journal.close()
 
     app.cleanup_ctx.append(lifetime)
     return app
