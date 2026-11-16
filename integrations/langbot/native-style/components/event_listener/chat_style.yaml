@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: EventListener
+metadata:
+  name: chat_style
+  label:
+    en_US: Optional private chat style
+    zh_Hans: 私人聊天风格
+  description:
+    en_US: Refresh a configured persona and remove unwanted whale signatures.
+    zh_Hans: 刷新配置的人设，清理不需要的鲸鱼签名。
+spec: {}
+execution:
+  python:
+    path: chat_style.py
+    attr: ChatStyle

@@ -1,19 +1,19 @@
 # LangBot 原生 Linux 微信桥接补丁
 
 本目录保存配套 LangBot 补丁，便于在维护者现有 LangBot checkout 中复现本 fork 的原生 Linux 桥接。
-补丁仅含下列 7 个既有源文件和 2 个新增测试；不包含其他 plugin、运行配置或 `.runtime` 内容。
+补丁仅含下列 7 个既有源文件和 3 个新增测试；不包含其他 plugin、运行配置或 `.runtime` 内容。
 
 ## 基线与依赖
 
 - LangBot HEAD：`307953188ba2edbaeb37133d2a38d542a218c233`。
 - 基线提交：`fix(llm): keep LiteLLM's bundled tiktoken encodings offline on Windows (#2982)`。
 - LangBot 版本：`4.11.6`，仓库声明 Python `>=3.11,<4.0`、`langbot-plugin==0.7.24`。
-- 配套读取器分支版本：`wechatauto-replica 1.2.10+iosyyy.linux.2`；Linux runtime 安装使用本 fork 的 `[linux-bridge]` extra。
+- 配套读取器分支版本：`wechatauto-replica 1.2.10+iosyyy.linux.3`；Linux runtime 安装使用本 fork 的 `[linux-bridge]` extra。
 - LangBot 依赖使用该 HEAD 的 `pyproject.toml` / `uv.lock`。补丁没有依赖或数据库迁移变更。
 - 本地合成验证环境：Python `3.13.2`、SDK `0.7.24`、requests `2.34.2`、websocket-client `1.9.2`、
   Pydantic `2.14.3`、SQLAlchemy `2.1.8`、greenlet `3.5.6`、pytest `9.2.0`、pytest-asyncio `1.4.1.post1`。
 
-补丁 SHA-256：`9e398bea4d97e4ca5943488da10ccc9c7873d84593e79c3e89aceb55c0f06d3a`
+补丁 SHA-256：`d8d2fea709f4a39b385fceb8fd23068d4cac4bd68bdb35e17a97283344fa308b`
 
 ## 内容
 
@@ -27,6 +27,7 @@ src/langbot/pkg/platform/botmgr.py
 src/langbot/pkg/platform/sources/wechatpad.py
 tests/unit_tests/platform/test_wechatpad_bridge_delivery.py
 tests/unit_tests/platform/test_wechatpad_native_completion.py
+tests/unit_tests/platform/test_wechatpad_startup_recovery.py
 ```
 
 `test_wechatpad_native_completion.py` 是准确的文件名。
@@ -34,7 +35,7 @@ tests/unit_tests/platform/test_wechatpad_native_completion.py
 ## 应用、安装与回退
 
 以下命令在完整 LangBot checkout 的根目录执行。`PATCH` 改为本目录补丁的绝对路径；
-这 9 个目标文件应与基线一致，其他工作区改动由维护者自行保留。
+这 10 个目标文件应与基线一致，其他工作区改动由维护者自行保留。
 
 ```bash
 PATCH=/absolute/path/to/wechatauto-replica/integrations/langbot/native-bridge.patch
@@ -51,7 +52,7 @@ uv sync --frozen --dev
 HTTP/WS 地址指向私有桥接，并把事件路由绑定到 Pipeline。`wxid` 使用已验证的本人 username，
 账号目录末尾的四位存储后缀属于路径身份，不应附加到 `wxid`。
 
-回退前停止处理新 native 消息。若应用后改过这 9 个目标文件，先保存这些改动，再确认反向检查通过：
+回退前停止处理新 native 消息。若应用后改过这 10 个目标文件，先保存这些改动，再确认反向检查通过：
 
 ```bash
 git apply --reverse --check "$PATCH"
@@ -82,7 +83,7 @@ git apply --reverse "$PATCH"
 补丁打包时已从准确 HEAD 导出上述 7 个源文件，在临时树执行：
 
 1. `git apply --check --whitespace=error-all`。
-2. 实际应用补丁，核对 9 个文件与本次选中工作树内容逐字节一致。
+2. 实际应用补丁，核对 10 个文件与本次选中工作树内容逐字节一致。
 3. `git apply --reverse --check` 及实际回退，核对 7 个基线文件恢复、新增测试删除。
 4. 核对打包前后的 LangBot HEAD、真实索引校验和及所选文件内容保持一致。
 
@@ -97,7 +98,7 @@ uv run --no-sync python -m pytest \
 
 SDK 与 limits 独立验证 **45 passed**，覆盖文本/图片 native `180` 与普通 `60` 秒的实际 Mock transport 参数。
 
-本地组合回归 **204 passed**：新增完成边界 17 项，加上 adapter、limits、controller、tenancy、terminal monitoring、
+本地组合回归 **224 passed**：新增完成边界 17 项、启动恢复 20 项，加上 adapter、limits、controller、tenancy、terminal monitoring、
 QueryPool、aggregator、platform execution trace 的相邻用例。该次测试入口只给 Application 类型导入提供轻量占位，
 实际执行 RuntimeBot、QueryPool、Controller、RuntimePipeline、SendResponseBackStage 与 adapter；provider、
 发送 HTTP 和 monitoring IO 使用合成替身。没有启动完整 LangBot 服务，也没有调用真实微信。
@@ -113,6 +114,7 @@ application.Application = object
 sys.modules['langbot.pkg.core.app'] = application
 raise SystemExit(pytest.main([
     'tests/unit_tests/platform/test_wechatpad_native_completion.py',
+    'tests/unit_tests/platform/test_wechatpad_startup_recovery.py',
     'tests/unit_tests/platform/test_wechatpad_bridge_delivery.py',
     'tests/unit_tests/platform/test_wechatpad_limits.py',
     'tests/unit_tests/pipeline/test_controller.py',
@@ -140,3 +142,6 @@ inbox ACK 已核实。单次问答观测由 90.52 秒降至 66.74 秒，仍存�
 人格主观语气仍由本人判断，网页可读不保证预报准确或所有站点可访问。
 当前仅开放本人文件传输助手 `/lb ` 文本路径，不扩展为群聊、图片或所有插件发送能力的验收。
 详见 [验证记录](../../docs/linux-verification.md)。真实账号、正文、token 和私有服务配置不写入补丁。
+
+2026-11-16 追加：只读 bootstrap GET 对连接错误/超时进行可取消退避重试；认证、JSON/schema 及生成授权 POST 不重试。
+速度优化和新历史/纯风格插件见 [性能记录](../../docs/linux-performance.md)。真实群验收仍等待加入目标群。

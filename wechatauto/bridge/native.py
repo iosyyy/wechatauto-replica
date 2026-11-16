@@ -28,6 +28,7 @@ from wechatauto.platforms.linux_sender import (
 )
 
 from .journal import Journal
+from .history import validate_history_config
 from .wechatpad import MAX_IMAGE_BYTES, create_app, encode_native_record
 
 
@@ -50,7 +51,8 @@ def _layout(value):
     if not isinstance(value, dict):
         raise ValueError("desktop_layout must contain an observed layout")
     if set(value) - {"app", "window_id", "search", "search_result", "header", "composer", "send",
-                     "activation_mode", "input_mode", "composer_input_mode", "header_aliases", "chat_row"}:
+                     "activation_mode", "input_mode", "composer_input_mode", "header_aliases", "chat_row",
+                     "reuse_verified_controls"}:
         raise ValueError("unknown desktop_layout field")
     selectors = {}
     for name in ("search", "search_result", "header", "composer", "send", "chat_row"):
@@ -71,6 +73,9 @@ def _layout(value):
     activation = value.get("activation_mode", "semantic")
     input_mode = value.get("input_mode", "ref")
     composer_input_mode = value.get("composer_input_mode", "clipboard")
+    reuse = value.get("reuse_verified_controls", False)
+    if type(reuse) is not bool or (reuse and (composer_input_mode != "set_value" or activation != "focused_return")):
+        raise ValueError("invalid verified-control reuse mode")
     if activation not in ("semantic", "focused_return", "observed_coordinates"):
         raise ValueError("invalid activation_mode")
     if input_mode not in ("ref", "clipboard_coordinates"):
@@ -84,7 +89,7 @@ def _layout(value):
         raise ValueError("unverified system header alias")
     return DesktopLayout(app=_exact(value.get("app"), "observed app", 128), window_id=window_id,
                          activation_mode=activation, input_mode=input_mode, composer_input_mode=composer_input_mode,
-                         header_aliases=aliases, **selectors)
+                         reuse_verified_controls=reuse, header_aliases=aliases, **selectors)
 
 
 def validate_config(value):
@@ -101,6 +106,7 @@ def validate_config(value):
     if account in (".", "..") or not re.fullmatch(r"[A-Za-z0-9_@.-]+", account):
         raise ValueError("invalid account directory")
     _exact(config.get("token"), "token")
+    config["native_history"] = validate_history_config(config.get("native_history"), config["token"])
     if not isinstance(config.get("expected_exe_sha256"), str) or not re.fullmatch(
             r"[0-9a-fA-F]{64}", config["expected_exe_sha256"]):
         raise ValueError("expected_exe_sha256 is required")
@@ -123,10 +129,18 @@ def validate_config(value):
     prefix = config["request_prefix"]
     if not isinstance(prefix, str) or not prefix or len(prefix) > 128 or "\x00" in prefix:
         raise ValueError("request_prefix must be nonempty")
+    config.setdefault("group_request_prefix", None)
+    group_prefix = config["group_request_prefix"]
+    if group_prefix is not None and (not isinstance(group_prefix, str) or not group_prefix
+                                     or len(group_prefix) > 128 or "\x00" in group_prefix):
+        raise ValueError("invalid group_request_prefix")
     config.setdefault("allow_physical", False)
     if type(config["allow_physical"]) is not bool:
         raise TypeError("allow_physical must be an explicit boolean")
     config.setdefault("bind_current_window", False)
+    config.setdefault("fast_desktop_checks", False)
+    if type(config["fast_desktop_checks"]) is not bool:
+        raise TypeError("fast_desktop_checks must be an explicit boolean")
     if type(config["bind_current_window"]) is not bool:
         raise TypeError("bind_current_window must be an explicit boolean")
     if config["bind_current_window"] and not config["allow_physical"]:
@@ -142,6 +156,9 @@ def validate_config(value):
     config.setdefault("poll_interval", 1.0)
     if type(config["poll_interval"]) not in (int, float) or not 0.1 <= config["poll_interval"] <= 60:
         raise ValueError("invalid poll_interval")
+    config.setdefault("delivery_confirm_timeout", 30)
+    if type(config["delivery_confirm_timeout"]) not in (int, float) or not 1 <= config["delivery_confirm_timeout"] <= 60:
+        raise ValueError("delivery_confirm_timeout must be between 1 and 60 seconds")
     state = Path(config["state_dir"])
     state.mkdir(mode=0o700, parents=True, exist_ok=True)
     Journal._check_private(state, directory=True)
@@ -282,7 +299,7 @@ class NativeProcessGuard:
         if not witnessed:
             raise RuntimeError("active native database identity is unavailable")
 
-    def _gui(self, pid):
+    def _window(self, pid):
         deadline = str(int(self.timeout * 1000))
         envelope = self.desktop_probe(["list-windows", "--app", self.observed.app, "--timeout-ms", deadline])
         windows = envelope.get("data") if envelope.get("ok") is True else None
@@ -299,6 +316,11 @@ class NativeProcessGuard:
         window_id = _exact(window.get("id"), "native window", 256)
         if self.window_id is not None and self.window_id != window_id:
             raise RuntimeError("native window changed")
+        return window_id
+
+    def _gui(self, pid):
+        window_id = self._window(pid)
+        deadline = str(int(self.timeout * 1000))
         observed = self.desktop_probe(["snapshot", "--app", self.observed.app, "--window-id", window_id,
                                        "--max-depth", "50", "--timeout-ms", deadline])
         data = observed.get("data", {})
@@ -313,7 +335,7 @@ class NativeProcessGuard:
                 raise RuntimeError("native login is visible")
         return window_id
 
-    def __call__(self, expected):
+    def _verify(self, expected, *, include_gui):
         self.verified = False
         try:
             db = self.db_provider()
@@ -330,7 +352,7 @@ class NativeProcessGuard:
             rel, path = contacts[0]
             if not _verify_enc_key(db._keys[rel], db._linux_reader.page1(Path(path))):
                 return False
-            window_id = self._gui(pid)
+            window_id = self._gui(pid) if include_gui else self._window(pid)
             processes, _ = self._processes()
             self._sources(selected)
             self._active_sources(processes, selected)
@@ -342,6 +364,13 @@ class NativeProcessGuard:
         except Exception:
             return False
 
+    def __call__(self, expected):
+        return self._verify(expected, include_gui=True)
+
+    def verify_source(self, expected):
+        """实时校验源、进程、FD、HMAC、窗口；写入界面由发送器的完整树另行验证。"""
+        return self._verify(expected, include_gui=False)
+
 
 class NativeBackend:
     """同一 RLock 串行化读取、轮询、GUI 发送及发送回执登记。
@@ -350,7 +379,7 @@ class NativeBackend:
     account_guard/driver_factory/db_factory 仅为离线测试注入点，CLI 不提供绕过开关。
     profile、is_logged_in、send_text、send_image、chatroom_members 实现网关的同步后端接口。
     poll_once 每个允许会话/分片最多处理 100 行；首次或新分片只建立基线，不导入历史。
-    get_history/list_groups 是有界内部接口，不通过本模块注册为公共 HTTP API。
+    get_history/list_groups 是有界内部接口，可供独立授权的历史 API 调用。
     """
 
     def __init__(self, config, journal, *, account_guard=None, driver_factory=None,
@@ -402,10 +431,13 @@ class NativeBackend:
             raise RuntimeError("native self contact is ambiguous or missing")
         return {"wxid": username, "nickname": rows[0]["nick_name"] or ""}
 
-    def _ready(self):
+    def _ready(self, *, source_only=False):
         db = self.ensure_loaded()
         profile = self._self_info(db)
-        if self.account_guard(profile["wxid"]) is not True:
+        probe = self.account_guard
+        if source_only and self.config["fast_desktop_checks"] and isinstance(probe, NativeProcessGuard):
+            probe = probe.verify_source
+        if probe(profile["wxid"]) is not True:
             raise RuntimeError("native GUI account is unverified")
         return db, profile
 
@@ -426,7 +458,7 @@ class NativeBackend:
             # 缓存仅省去额外 GUI 探测，发送器仍在准备和提交前独立校验账号。
             self._self_info(self.ensure_loaded())
             return self.sender
-        db, profile = self._ready()
+        db, profile = self._ready(source_only=self.config["fast_desktop_checks"])
         if self.sender is None:
             observed = _layout(self.config["desktop_layout"])
             if observed.window_id is None and self.config["allow_physical"]:
@@ -438,7 +470,13 @@ class NativeBackend:
             driver = self._driver_factory(observed, env=self.environment,
                                           allow_physical=self.config["allow_physical"],
                                           timeout=self.config["desktop_timeout"])
-            self.sender = LinuxSender(db, driver, account_guard=self.account_guard, own_username=profile["wxid"])
+            guard = self.account_guard
+            if self.config["fast_desktop_checks"] and isinstance(guard, NativeProcessGuard):
+                if not isinstance(driver, AgentDesktopDriver):
+                    raise RuntimeError("Source-only guard requires the verified native desktop driver")
+                guard = guard.verify_source
+            self.sender = LinuxSender(db, driver, account_guard=guard, own_username=profile["wxid"],
+                                      verify_timeout=self.config["delivery_confirm_timeout"])
         return self.sender
 
     def _write_allowed(self, chat):
@@ -497,13 +535,18 @@ class NativeBackend:
                 return None
         elif not sender or sender == own:
             return None
+        elif chat.endswith("@chatroom") and self.config["group_request_prefix"] is not None:
+            # 安静保存普通群记录，仅显式提问进入模型；历史工具仍直接读取所有本地记录。
+            body = content[len(sender) + 2:] if content.startswith(sender + ':\n') else content
+            if row["msg_type"] != 1 or not body.startswith(self.config["group_request_prefix"]):
+                return None
         return encode_native_record({**row, "username": chat, "content": content, "shard": shard}, own)
 
     def poll_once(self):
         """只处理显式允许的新行；事件与水位同事务，任何失败均保留可重读位置。"""
         admitted = 0
         with self.lock:
-            db, profile = self._ready()
+            db, profile = self._ready(source_only=True)
             for chat in self.config["allowed_chats"]:
                 table = "Msg_" + hashlib.md5(chat.encode()).hexdigest()
                 for shard in db._message_dbs():
@@ -534,21 +577,32 @@ class NativeBackend:
         return admitted
 
     def get_history(self, group_username, limit=50, offset=0):
-        """供后续经所有者授权的工具调用；不开放通用 HTTP 历史导入接口。"""
+        """只读本地已同步记录；跨群工具另有独立所有者身份和群白名单。"""
         _page(limit, offset)
-        if group_username not in self.config["allowed_chats"] or not group_username.endswith("@chatroom"):
+        groups = set(self.config["allowed_chats"]) | set((self.config["native_history"] or {}).get("allowed_groups", []))
+        if group_username not in groups or not group_username.endswith("@chatroom"):
             raise PermissionError("group is not in allowed_chats")
         with self.lock:
-            return self._ready()[0].get_messages(group_username, limit=limit, offset=offset)
+            return self._ready(source_only=True)[0].get_messages(group_username, limit=limit, offset=offset)
 
-    def list_groups(self, limit=50, offset=0):
+    def list_groups(self, limit=50, offset=0, allowed_groups=None):
         """直接在 contact SQL 分页，只返回群 username/name，不展开成员或消息。"""
         _page(limit, offset)
         with self.lock:
-            db, _ = self._ready()
+            if allowed_groups is not None and (not isinstance(allowed_groups, list) or len(allowed_groups) > 100
+                    or any(not isinstance(x, str) or not x.endswith('@chatroom') for x in allowed_groups)):
+                raise ValueError("invalid history groups")
+            if allowed_groups == []:
+                return []
+            db, _ = self._ready(source_only=True)
             with closing(db._contact_conn()) as conn:
-                rows = conn.execute("SELECT username,nick_name FROM contact WHERE username LIKE '%@chatroom' "
-                                    "ORDER BY username LIMIT ? OFFSET ?", (limit, offset)).fetchall()
+                predicate = "username LIKE '%@chatroom'"
+                values = []
+                if allowed_groups is not None:
+                    predicate += ' AND username IN (' + ','.join('?' for _ in allowed_groups) + ')'
+                    values.extend(allowed_groups)
+                rows = conn.execute("SELECT username,nick_name FROM contact WHERE " + predicate +
+                                    " ORDER BY username LIMIT ? OFFSET ?", (*values, limit, offset)).fetchall()
             return [{"username": row["username"], "name": row["nick_name"] or row["username"]} for row in rows]
 
     def close(self):
@@ -579,7 +633,7 @@ def create_runtime_app(config, *, backend=None, journal=None, environment=None):
             raise
     if backend.journal is not journal:
         raise ValueError("runtime backend and gateway must share one journal")
-    app = create_app(backend, journal, config["token"])
+    app = create_app(backend, journal, config["token"], history_config=config["native_history"])
     app[BACKEND_KEY] = backend
     app[JOURNAL_KEY] = journal
 

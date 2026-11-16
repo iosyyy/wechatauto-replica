@@ -19,8 +19,23 @@
 首次启动只建立分片水位，不把已有历史一次性发给模型。
 
 当前发送接口验证文本；图片、语音、文件和 @mention 仍未完成原生发送验收。
-不能把 API 路径存在当作这些能力可用。群历史可通过有界内部读取接口查询，
-没有公开的“读取所有聊天记录”HTTP 端点。
+不能把 API 路径存在当作这些能力可用。可选的群历史 HTTP 工具使用独立令牌与会话权限，
+不提供任意聊天读取接口，详见 [群历史插件](../integrations/langbot/native-history/README.md)。
+
+## 性能与群接入
+
+完整问答当前有效样本为 40.83 秒，仍有明显延迟；阶段拆分和测试限制见
+[性能记录](linux-performance.md)。可按实际观察启用 `fast_desktop_checks` 与布局的
+`reuse_verified_controls`，后者仅适用于 `set_value` 和 `focused_return`。
+`delivery_confirm_timeout` 默认 30 秒，只轮询送达证据，不重发。
+
+普通私聊应把已核实的对方 username 同时放入 `allowed_chats` 与 `write_chats`。
+`filehelper` 的 `/lb ` 规则不会自动授权其他私聊。群接入也需要精确群 username、
+相应群事件路由及观察过的实际布局；可设 `group_request_prefix="/lb "`，仅把明确请求转发给模型。
+群历史白名单 `native_history.allowed_groups` 与收发名单分别配置。
+历史仅覆盖该账号本地已有数据；群内只读本群，跨群查询限定所有者私聊。
+群流水线必须与私人记忆隔离，原生文字流水线可使用
+[纯风格插件](../integrations/langbot/native-style/README.md) 保留人设而不提供未支持的图片工具。
 
 ## 安装与登录
 

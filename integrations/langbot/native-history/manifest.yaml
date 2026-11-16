@@ -1,0 +1,57 @@
+apiVersion: v1
+kind: Plugin
+metadata:
+  author: local
+  name: NativeWeChatHistory
+  version: 0.1.2
+  repository: https://github.com/iosyyy/wechatauto-replica
+  label:
+    en_US: Native WeChat History
+    zh_Hans: 原生微信群历史
+  description:
+    en_US: Owner-private and current-group native local history tools for the current pipeline model.
+    zh_Hans: 所有者私聊和当前群隔离的本机历史工具，由当前模型总结。
+  icon: assets/icon.svg
+spec:
+  permissions:
+    workspace_operations: []
+    capabilities: []
+  config:
+    - name: server_url
+      type: string
+      required: true
+      default: http://127.0.0.1:5080
+      label:
+        en_US: Native bridge base URL
+        zh_Hans: 原生桥接地址
+    - name: api_token
+      type: string
+      required: true
+      default: ''
+      label:
+        en_US: Dedicated history bearer token
+        zh_Hans: 历史专用令牌
+    - name: owners_json
+      type: text
+      required: true
+      default: '[]'
+      label:
+        en_US: Exact owner bindings JSON
+        zh_Hans: 所有者私聊绑定 JSON
+    - name: allow_private_http
+      type: boolean
+      required: false
+      default: false
+      label:
+        en_US: Allow HTTP to a private IP or verified Docker service
+        zh_Hans: 允许私网 IP 或指定 Docker 服务的 HTTP
+  components:
+    Tool:
+      fromDirs:
+        - path: components/tools/
+execution:
+  python:
+    path: main.py
+    attr: NativeHistoryPlugin
+  sharedRuntime: shared-runtime-v1
+  componentModel: stateless-v1

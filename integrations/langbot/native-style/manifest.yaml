@@ -1,0 +1,43 @@
+apiVersion: v1
+kind: Plugin
+metadata:
+  author: local
+  name: NativeWeChatStyle
+  version: 0.1.0
+  repository: https://github.com/iosyyy/wechatauto-replica
+  label:
+    en_US: Native WeChat Style
+    zh_Hans: 原生微信聊天风格
+  description:
+    en_US: The existing StickerHub persona refresh and whale-suffix cleanup as a style-only listener.
+    zh_Hans: 原样保留 StickerHub 人格刷新和鲸鱼后缀清理的纯风格监听器。
+  icon: assets/icon.svg
+spec:
+  permissions:
+    workspace_operations: []
+    capabilities: []
+  config:
+    - name: persona_override
+      type: text
+      required: false
+      default: ''
+      label:
+        en_US: Existing persona override
+        zh_Hans: 现有人格配置
+    - name: strip_whale_suffixes
+      type: boolean
+      required: false
+      default: false
+      label:
+        en_US: Remove whale suffixes
+        zh_Hans: 清理鲸鱼后缀
+  components:
+    EventListener:
+      fromDirs:
+        - path: components/event_listener/
+execution:
+  python:
+    path: main.py
+    attr: NativeWeChatStyle
+  sharedRuntime: shared-runtime-v1
+  componentModel: stateless-v1

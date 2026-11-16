@@ -1,0 +1,23 @@
+{
+  "repository": "https://github.com/langbot-app/LangBot",
+  "source_checkout_revision": "307953188ba2edbaeb37133d2a38d542a218c233",
+  "source_state": "Exact local StickerHub component and tests, including previously authorized local persona/style changes; no behavior changes in this package.",
+  "files": {
+    "components/event_listener/chat_style.py": {
+      "source": "plugins/misc/StickerHub/components/event_listener/chat_style.py",
+      "sha256": "1d3c87c5ed73d79d9a05216638659db8732d5fa27e98851715032b2ef5fd562a"
+    },
+    "components/event_listener/chat_style.yaml": {
+      "source": "plugins/misc/StickerHub/components/event_listener/chat_style.yaml",
+      "sha256": "edf8d23455c93b3f383eb724adc20a173a4780c69d9df6756179f1ce808994b0"
+    },
+    "tests/test_chat_style.py": {
+      "source": "plugins/misc/StickerHub/tests/test_chat_style.py",
+      "sha256": "f0cbe9c10d374efdee206c9b62ac1c01a5697ae18040adba2b14e78a2a5b8584"
+    },
+    "UPSTREAM-LICENSE.txt": {
+      "source": "LICENSE",
+      "sha256": "43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1"
+    }
+  }
+}

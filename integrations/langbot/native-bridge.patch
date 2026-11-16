@@ -1,5 +1,5 @@
 diff --git a/src/langbot/libs/wechatpad_api/api/message.py b/src/langbot/libs/wechatpad_api/api/message.py
-index 52c7bdb572c777b0544e1785864b10ba02bd0cdd..46c75b9ff8fb9f103b1068967f39c701f1b5f18c 100644
+index 52c7bdb..46c75b9 100644
 --- a/src/langbot/libs/wechatpad_api/api/message.py
 +++ b/src/langbot/libs/wechatpad_api/api/message.py
 @@ -6,36 +6,30 @@ class MessageApi:
@@ -50,7 +50,7 @@ index 52c7bdb572c777b0544e1785864b10ba02bd0cdd..46c75b9ff8fb9f103b1068967f39c701
  
      def post_voice(self, to_wxid, voice_data, voice_forma, voice_duration):
 diff --git a/src/langbot/libs/wechatpad_api/client.py b/src/langbot/libs/wechatpad_api/client.py
-index bb9b2f54ef3c9314e151a20ddc3d278b30747bd6..0b077d6e70d908b0a1d0eb85d2cf5e62baa56bb9 100644
+index bb9b2f5..0b077d6 100644
 --- a/src/langbot/libs/wechatpad_api/client.py
 +++ b/src/langbot/libs/wechatpad_api/client.py
 @@ -36,12 +36,16 @@ class WeChatPadClient:
@@ -75,7 +75,7 @@ index bb9b2f54ef3c9314e151a20ddc3d278b30747bd6..0b077d6e70d908b0a1d0eb85d2cf5e62
  
      def send_voice_message(self, to_wxid, voice_data, voice_forma, voice_duration):
 diff --git a/src/langbot/libs/wechatpad_api/util/http_util.py b/src/langbot/libs/wechatpad_api/util/http_util.py
-index 312afb41650ec463af6cf030b010bddf23b8e5b0..4b9b5a36f132f8559dc75dd8ee53edbeb404207f 100644
+index 312afb4..4b9b5a3 100644
 --- a/src/langbot/libs/wechatpad_api/util/http_util.py
 +++ b/src/langbot/libs/wechatpad_api/util/http_util.py
 @@ -25,7 +25,7 @@ def _read_requests_response_limited(response: requests.Response) -> dict:
@@ -97,7 +97,7 @@ index 312afb41650ec463af6cf030b010bddf23b8e5b0..4b9b5a36f132f8559dc75dd8ee53edbe
          ) as response:
              response.raise_for_status()
 diff --git a/src/langbot/pkg/pipeline/controller.py b/src/langbot/pkg/pipeline/controller.py
-index 3a57d760bb1b0631a39e8e5e039cca30ed746153..bf4c03ac12f9c1805044c184247d7bf942a73f2d 100644
+index 3a57d76..bf4c03a 100644
 --- a/src/langbot/pkg/pipeline/controller.py
 +++ b/src/langbot/pkg/pipeline/controller.py
 @@ -73,6 +73,8 @@ class Controller:
@@ -128,7 +128,7 @@ index 3a57d760bb1b0631a39e8e5e039cca30ed746153..bf4c03ac12f9c1805044c184247d7bf9
              queued_context = get_query_execution_context(selected_query)
  
 diff --git a/src/langbot/pkg/pipeline/pipelinemgr.py b/src/langbot/pkg/pipeline/pipelinemgr.py
-index 218ba472a5b28b13f3e54c27a803e81c224f53e1..ca3d639b32fd228c24a3b35831b8a51f9483d542 100644
+index 218ba47..ca3d639 100644
 --- a/src/langbot/pkg/pipeline/pipelinemgr.py
 +++ b/src/langbot/pkg/pipeline/pipelinemgr.py
 @@ -171,6 +171,8 @@ class RuntimePipeline:
@@ -164,7 +164,7 @@ index 218ba472a5b28b13f3e54c27a803e81c224f53e1..ca3d639b32fd228c24a3b35831b8a51f
  
      async def _process_query_body(self, query: pipeline_query.Query):
 diff --git a/src/langbot/pkg/platform/botmgr.py b/src/langbot/pkg/platform/botmgr.py
-index 251e67a1786a652c8274c6cb40237689ae8c1f3c..84b8412f4b69bc03c9736fc5ed333029e5556a5f 100644
+index 251e67a..84b8412 100644
 --- a/src/langbot/pkg/platform/botmgr.py
 +++ b/src/langbot/pkg/platform/botmgr.py
 @@ -1110,6 +1110,16 @@ class RuntimeBot:
@@ -296,7 +296,7 @@ index 251e67a1786a652c8274c6cb40237689ae8c1f3c..84b8412f4b69bc03c9736fc5ed333029
      async def _handle_interaction_submission(
          self,
 diff --git a/src/langbot/pkg/platform/sources/wechatpad.py b/src/langbot/pkg/platform/sources/wechatpad.py
-index 9b3e40d7d67a68a4f98c2227c7279d7225df7207..801e119dc8c63cdc5d354d7b6ac394143987794b 100644
+index 9b3e40d..7010dda 100644
 --- a/src/langbot/pkg/platform/sources/wechatpad.py
 +++ b/src/langbot/pkg/platform/sources/wechatpad.py
 @@ -1,12 +1,13 @@
@@ -314,18 +314,19 @@ index 9b3e40d7d67a68a4f98c2227c7279d7225df7207..801e119dc8c63cdc5d354d7b6ac39414
  import re
  import base64
  import copy
-@@ -559,6 +560,10 @@ class WeChatPadAdapter(abstract_platform_adapter.AbstractMessagePlatformAdapter)
+@@ -559,6 +560,11 @@ class WeChatPadAdapter(abstract_platform_adapter.AbstractMessagePlatformAdapter)
          typing.Callable[[platform_events.Event, abstract_platform_adapter.AbstractMessagePlatformAdapter], None],
      ] = {}
      _MAX_CALLBACK_FUTURES = 100
 +    _BRIDGE_ACK_TIMEOUT = 5
 +    _MAX_BRIDGE_COMPLETED = 1000
++    _BOOTSTRAP_RETRY_DELAYS: typing.ClassVar[tuple[float, ...]] = (1, 2, 5)
 +    native_bridge_completion: typing.ClassVar[bool] = True
 +    native_bridge_completion_timeout: typing.ClassVar[float] = 300
  
      def __init__(self, config: dict, logger: EventLogger):
          quart_app = quart.Quart(__name__)
-@@ -583,36 +588,87 @@ class WeChatPadAdapter(abstract_platform_adapter.AbstractMessagePlatformAdapter)
+@@ -583,36 +589,87 @@ class WeChatPadAdapter(abstract_platform_adapter.AbstractMessagePlatformAdapter)
          self._stop_event = threading.Event()
          self._callback_futures: set = set()
          self._callback_futures_lock = threading.Lock()
@@ -427,7 +428,7 @@ index 9b3e40d7d67a68a4f98c2227c7279d7225df7207..801e119dc8c63cdc5d354d7b6ac39414
              if msg['type'] == 'text' and at_targets:
                  if 'all' in at_targets:
                      msg['content'] = f'@所有人 {msg["content"]}'
-@@ -623,13 +679,28 @@ class WeChatPadAdapter(abstract_platform_adapter.AbstractMessagePlatformAdapter)
+@@ -623,13 +680,28 @@ class WeChatPadAdapter(abstract_platform_adapter.AbstractMessagePlatformAdapter)
                              at_nick_name_list.append(f'@{member["nick_name"]}')
                      msg['content'] = f'{" ".join(at_nick_name_list)} {msg["content"]}'
  
@@ -459,7 +460,7 @@ index 9b3e40d7d67a68a4f98c2227c7279d7225df7207..801e119dc8c63cdc5d354d7b6ac39414
                  ),
                  'WeChatEmoji': lambda msg: self.bot.send_emoji_message(
                      to_wxid=target_id, emoji_md5=msg['emoji_md5'], emoji_size=msg['emoji_size']
-@@ -645,36 +716,84 @@ class WeChatPadAdapter(abstract_platform_adapter.AbstractMessagePlatformAdapter)
+@@ -645,36 +717,84 @@ class WeChatPadAdapter(abstract_platform_adapter.AbstractMessagePlatformAdapter)
                      app_message=msg['app_msg'],
                      type=0,
                  ),
@@ -551,7 +552,7 @@ index 9b3e40d7d67a68a4f98c2227c7279d7225df7207..801e119dc8c63cdc5d354d7b6ac39414
  
          future.add_done_callback(done)
  
-@@ -688,9 +807,19 @@ class WeChatPadAdapter(abstract_platform_adapter.AbstractMessagePlatformAdapter)
+@@ -688,9 +808,19 @@ class WeChatPadAdapter(abstract_platform_adapter.AbstractMessagePlatformAdapter)
          message: platform_message.MessageChain,
          quote_origin: bool = False,
      ):
@@ -572,7 +573,71 @@ index 9b3e40d7d67a68a4f98c2227c7279d7225df7207..801e119dc8c63cdc5d354d7b6ac39414
              return await self._handle_message(message, target_id)
  
      async def is_muted(self, group_id: int) -> bool:
-@@ -763,12 +892,12 @@ class WeChatPadAdapter(abstract_platform_adapter.AbstractMessagePlatformAdapter)
+@@ -714,6 +844,41 @@ class WeChatPadAdapter(abstract_platform_adapter.AbstractMessagePlatformAdapter)
+     ):
+         pass
+ 
++    @staticmethod
++    def _is_bootstrap_transport_error(error):
++        pending, seen, transport = [error], set(), False
++        while pending:
++            current = pending.pop()
++            if id(current) in seen:
++                continue
++            seen.add(id(current))
++            if isinstance(current, (requests.HTTPError, ValueError, TypeError, KeyError)):
++                return False
++            if isinstance(current, (requests.ConnectionError, requests.Timeout)):
++                transport = True
++            pending.extend(link for link in (current.__cause__, current.__context__) if link is not None)
++        return transport
++
++    async def _bootstrap_get(self, read):
++        """Retry only read-only bootstrap transport failures while the adapter is active."""
++        attempt = 0
++        while not self._stop_event.is_set():
++            try:
++                return await asyncio.to_thread(read)
++            except Exception as error:
++                if not self._is_bootstrap_transport_error(error):
++                    raise
++                logging.getLogger(__name__).warning('WeChatPad bootstrap transport unavailable; retrying')
++            delay = self._BOOTSTRAP_RETRY_DELAYS[min(attempt, len(self._BOOTSTRAP_RETRY_DELAYS) - 1)]
++            deadline = asyncio.get_running_loop().time() + delay
++            while not self._stop_event.is_set():
++                remaining = deadline - asyncio.get_running_loop().time()
++                if remaining <= 0:
++                    break
++                await asyncio.sleep(min(remaining, 0.1))
++            attempt += 1
++        return None
++
+     async def run_async(self):
+         self._event_loop = asyncio.get_running_loop()
+         self._stop_event.clear()
+@@ -722,7 +887,9 @@ class WeChatPadAdapter(abstract_platform_adapter.AbstractMessagePlatformAdapter)
+         else:
+             if self.config['token']:
+                 self.bot = WeChatPadClient(self.config['wechatpad_url'], self.config['token'])
+-                data = await asyncio.to_thread(self.bot.get_login_status)
++                data = await self._bootstrap_get(self.bot.get_login_status)
++                if self._stop_event.is_set():
++                    return
+                 if data['Code'] == 300 and data['Text'] == '你已退出微信':
+                     response = await asyncio.to_thread(
+                         requests.post,
+@@ -750,7 +917,9 @@ class WeChatPadAdapter(abstract_platform_adapter.AbstractMessagePlatformAdapter)
+                 self.config['token'] = response_data['Data'][0]
+ 
+         self.bot = WeChatPadClient(self.config['wechatpad_url'], self.config['token'], logger=self.logger)
+-        profile = await asyncio.to_thread(self.bot.get_profile)
++        profile = await self._bootstrap_get(self.bot.get_profile)
++        if self._stop_event.is_set():
++            return
+         self.bot_account_id = profile['Data']['userInfo']['nickName']['str']
+         self.config['wxid'] = profile['Data']['userInfo']['userName']['str']
+ 
+@@ -763,12 +932,12 @@ class WeChatPadAdapter(abstract_platform_adapter.AbstractMessagePlatformAdapter)
                          logging.getLogger(__name__).warning('WeChatPad WebSocket message exceeds the size limit')
                          return
                      data = json.loads(message)
@@ -587,7 +652,7 @@ index 9b3e40d7d67a68a4f98c2227c7279d7225df7207..801e119dc8c63cdc5d354d7b6ac39414
  
              def on_close(ws, close_status_code, close_msg):
                  logging.getLogger(__name__).info('WeChatPad WebSocket closed')
-@@ -817,6 +946,13 @@ class WeChatPadAdapter(abstract_platform_adapter.AbstractMessagePlatformAdapter)
+@@ -817,6 +986,13 @@ class WeChatPadAdapter(abstract_platform_adapter.AbstractMessagePlatformAdapter)
                  *(asyncio.wrap_future(future) for future in futures),
                  return_exceptions=True,
              )
@@ -603,7 +668,7 @@ index 9b3e40d7d67a68a4f98c2227c7279d7225df7207..801e119dc8c63cdc5d354d7b6ac39414
          if thread is not None and thread.is_alive():
 diff --git a/tests/unit_tests/platform/test_wechatpad_bridge_delivery.py b/tests/unit_tests/platform/test_wechatpad_bridge_delivery.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..a1df313975ba35b66ad8b0c0f750123178c73be7
+index 0000000..a1df313
 --- /dev/null
 +++ b/tests/unit_tests/platform/test_wechatpad_bridge_delivery.py
 @@ -0,0 +1,517 @@
@@ -1126,7 +1191,7 @@ index 0000000000000000000000000000000000000000..a1df313975ba35b66ad8b0c0f7501231
 +    assert 'https://' not in caplog.text
 diff --git a/tests/unit_tests/platform/test_wechatpad_native_completion.py b/tests/unit_tests/platform/test_wechatpad_native_completion.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..8bf67bf3bfbafb2a0b854e81b95184d25ccdbe73
+index 0000000..8bf67bf
 --- /dev/null
 +++ b/tests/unit_tests/platform/test_wechatpad_native_completion.py
 @@ -0,0 +1,341 @@
@@ -1471,3 +1536,207 @@ index 0000000000000000000000000000000000000000..8bf67bf3bfbafb2a0b854e81b95184d2
 +    event = bot._legacy_message_to_eba_event(legacy, h.adapter)
 +    with pytest.raises(RuntimeError):
 +        await bot._handle_platform_event_body(event, h.adapter)
+diff --git a/tests/unit_tests/platform/test_wechatpad_startup_recovery.py b/tests/unit_tests/platform/test_wechatpad_startup_recovery.py
+new file mode 100644
+index 0000000..219d213
+--- /dev/null
++++ b/tests/unit_tests/platform/test_wechatpad_startup_recovery.py
+@@ -0,0 +1,198 @@
++"""Read-only bootstrap failures must recover before WebSocket startup."""
++
++from __future__ import annotations
++
++import asyncio
++import json
++import logging
++from types import SimpleNamespace
++from unittest.mock import Mock
++
++import pytest
++import requests
++
++from tests.unit_tests.platform.test_wechatpad_bridge_delivery import DummyLogger, wechatpad
++
++
++PROFILE = {'Data': {'userInfo': {'nickName': {'str': 'synthetic bot'}, 'userName': {'str': 'wxid_self'}}}}
++
++
++def wrapped_transport_error():
++    try:
++        raise requests.ConnectionError('https://example.invalid?key=private-token private body')
++    except requests.ConnectionError:
++        try:
++            raise RuntimeError('SDK wrapper includes a private token')
++        except RuntimeError as error:
++            return error
++
++
++@pytest.fixture
++def startup(monkeypatch):
++    adapter = wechatpad.WeChatPadAdapter(
++        {
++            'wechatpad_url': 'https://example.invalid',
++            'wechatpad_ws': 'wss://example.invalid',
++            'admin_key': 'synthetic-admin',
++            'token': 'private-token',
++            'wxid': 'wxid_self',
++        },
++        DummyLogger(),
++    )
++    client = SimpleNamespace(get_login_status=Mock(return_value={'Code': 200}), get_profile=Mock(return_value=PROFILE))
++    client_factory = Mock(return_value=client)
++    monkeypatch.setattr(wechatpad, 'WeChatPadClient', client_factory)
++    monkeypatch.setattr(type(adapter), '_BOOTSTRAP_RETRY_DELAYS', (0.001, 0.002, 0.003), raising=False)
++    post = Mock(side_effect=AssertionError('bootstrap reads must not generate a new token'))
++    monkeypatch.setattr(wechatpad.requests, 'post', post)
++    socket = SimpleNamespace(run_forever=Mock(side_effect=lambda **kwargs: adapter._stop_event.set()))
++    socket_factory = Mock(return_value=socket)
++    monkeypatch.setattr(wechatpad.websocket, 'WebSocketApp', socket_factory)
++
++    def inline_thread(*, target, **kwargs):
++        return SimpleNamespace(start=target, is_alive=lambda: False)
++
++    monkeypatch.setattr(wechatpad, 'threading', SimpleNamespace(Thread=inline_thread))
++    return SimpleNamespace(
++        adapter=adapter, client=client, factory=client_factory, socket_factory=socket_factory, post=post
++    )
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize('method', ['get_login_status', 'get_profile'])
++async def test_transient_bootstrap_reads_recover_and_reach_websocket_setup(startup, method, caplog):
++    h = startup
++    read = getattr(h.client, method)
++    read.side_effect = [
++        wrapped_transport_error(),
++        requests.ConnectionError('Connection refused'),
++        {'Code': 200} if method == 'get_login_status' else PROFILE,
++    ]
++    with caplog.at_level(logging.WARNING, logger=wechatpad.__name__):
++        await asyncio.wait_for(h.adapter.run_async(), 1)
++    assert read.call_count == 3
++    h.socket_factory.assert_called_once()
++    h.post.assert_not_called()
++    assert h.adapter.bot_account_id == 'synthetic bot'
++    assert h.adapter.config['wxid'] == 'wxid_self'
++    assert len(caplog.records) == 2
++    for private in ('example.invalid', 'private-token', 'private body', 'SDK wrapper'):
++        assert private not in caplog.text
++
++
++@pytest.mark.asyncio
++async def test_explicit_wrapped_timeout_cause_recovers_before_websocket_setup(startup):
++    error = RuntimeError('SDK timeout wrapper')
++    error.__cause__ = requests.Timeout('provider request timed out')
++    startup.client.get_profile.side_effect = [error, PROFILE]
++    await asyncio.wait_for(startup.adapter.run_async(), 1)
++    assert startup.client.get_profile.call_count == 2
++    startup.socket_factory.assert_called_once()
++    startup.post.assert_not_called()
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize('method', ['get_login_status', 'get_profile'])
++@pytest.mark.parametrize('error', [RuntimeError('configuration error'), json.JSONDecodeError('bad JSON', 'x', 0)])
++async def test_nontransport_read_errors_do_not_retry_or_start_websocket(startup, method, error):
++    read = getattr(startup.client, method)
++    read.side_effect = error
++    with pytest.raises(type(error)):
++        await startup.adapter.run_async()
++    assert read.call_count == 1
++    startup.socket_factory.assert_not_called()
++    startup.post.assert_not_called()
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize('error', [json.JSONDecodeError('bad JSON', 'x', 0), KeyError('Data'), TypeError('schema')])
++async def test_wrapped_schema_error_with_old_transport_context_is_not_retried(startup, error):
++    error.__context__ = requests.ConnectionError('previous request')
++    wrapped = RuntimeError('SDK parse wrapper')
++    wrapped.__cause__ = error
++    startup.client.get_profile.side_effect = wrapped
++    with pytest.raises(RuntimeError, match='SDK parse wrapper'):
++        await startup.adapter.run_async()
++    assert startup.client.get_profile.call_count == 1
++    startup.socket_factory.assert_not_called()
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize('method', ['get_login_status', 'get_profile'])
++@pytest.mark.parametrize('status', [401, 403])
++async def test_wrapped_http_auth_failure_is_not_a_retryable_transport_error(startup, method, status):
++    response = requests.Response()
++    response.status_code = status
++    rejected = requests.HTTPError('private provider body', response=response)
++    rejected.__context__ = requests.ConnectionError('older transport failure')
++    wrapped = RuntimeError('SDK auth wrapper')
++    wrapped.__cause__ = rejected
++    read = getattr(startup.client, method)
++    read.side_effect = wrapped
++    with pytest.raises(RuntimeError, match='SDK auth wrapper'):
++        await startup.adapter.run_async()
++    assert read.call_count == 1
++    startup.socket_factory.assert_not_called()
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize('method,result', [('get_login_status', {}), ('get_profile', {'Data': {}})])
++async def test_malformed_bootstrap_schema_is_terminal(startup, method, result):
++    read = getattr(startup.client, method)
++    read.return_value = result
++    with pytest.raises(KeyError):
++        await startup.adapter.run_async()
++    assert read.call_count == 1
++    startup.socket_factory.assert_not_called()
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize(
++    'token,login_status', [('', {'Code': 200}), ('private-token', {'Code': 300, 'Text': '你已退出微信'})]
++)
++async def test_auth_key_post_transport_failure_is_never_retried(startup, token, login_status):
++    startup.adapter.config['token'] = token
++    startup.client.get_login_status.return_value = login_status
++    startup.post.side_effect = requests.ConnectionError('admin unavailable')
++    with pytest.raises(requests.ConnectionError):
++        await startup.adapter.run_async()
++    startup.post.assert_called_once()
++    startup.socket_factory.assert_not_called()
++
++
++@pytest.mark.asyncio
++async def test_cancellation_during_bootstrap_backoff_propagates_immediately(startup, monkeypatch):
++    startup.client.get_login_status.side_effect = requests.Timeout('read timed out')
++    monkeypatch.setattr(type(startup.adapter), '_BOOTSTRAP_RETRY_DELAYS', (5, 5, 5))
++    task = asyncio.create_task(startup.adapter.run_async())
++    try:
++        while startup.client.get_login_status.call_count == 0:
++            await asyncio.sleep(0)
++        await asyncio.sleep(0.01)
++        task.cancel()
++        with pytest.raises(asyncio.CancelledError):
++            await asyncio.wait_for(task, 0.2)
++        assert startup.client.get_login_status.call_count == 1
++        startup.socket_factory.assert_not_called()
++    finally:
++        if not task.done():
++            task.cancel()
++            await asyncio.gather(task, return_exceptions=True)
++
++
++@pytest.mark.asyncio
++async def test_stop_flag_ends_bootstrap_backoff_without_another_read(startup, monkeypatch):
++    startup.client.get_profile.side_effect = requests.ConnectionError('not ready')
++    monkeypatch.setattr(type(startup.adapter), '_BOOTSTRAP_RETRY_DELAYS', (5, 5, 5))
++    task = asyncio.create_task(startup.adapter.run_async())
++    try:
++        while startup.client.get_profile.call_count == 0:
++            await asyncio.sleep(0)
++        startup.adapter._stop_event.set()
++        await asyncio.wait_for(task, 0.3)
++        assert startup.client.get_profile.call_count == 1
++        startup.socket_factory.assert_not_called()
++    finally:
++        if not task.done():
++            task.cancel()
++            await asyncio.gather(task, return_exceptions=True)
