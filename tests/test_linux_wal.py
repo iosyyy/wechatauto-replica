@@ -2,6 +2,7 @@
 
 from contextlib import closing
 import hashlib
+import os
 from pathlib import Path
 import sqlite3
 import struct
@@ -98,10 +99,15 @@ class LinuxWalTests(unittest.TestCase):
         before = cached.read_bytes()
         wal.write_bytes(old_wal)
         original = reader._snapshot
+        modified_ns = source.stat().st_mtime_ns
         def checkpoint_every_time(path, target, expected=None):
+            nonlocal modified_ns
             original(path, target, expected)
             if Path(path).resolve() == source.resolve():
                 source.write_bytes(state_a)
+                # 相同密文重写可能仍在同一时钟刻度；显式推进 mtime 保证每轮都可观察。
+                modified_ns += 1_000_000_000
+                os.utime(source, ns=(source.stat().st_atime_ns, modified_ns))
         with patch.object(reader, '_snapshot', side_effect=checkpoint_every_time):
             with self.assertRaisesRegex(RuntimeError, '快照'):
                 with closing(db._open(rel)):
