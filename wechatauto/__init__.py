@@ -50,7 +50,7 @@ def __getattr__(name):
 def __dir__():
     return sorted(set(globals()) | set(__all__))
 
-__version__ = "1.2.10+iosyyy.linux.1"
+__version__ = "1.2.10+iosyyy.linux.2"
 
 __all__ = [
     "WeChat",

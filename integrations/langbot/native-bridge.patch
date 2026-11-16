@@ -1,0 +1,1473 @@
+diff --git a/src/langbot/libs/wechatpad_api/api/message.py b/src/langbot/libs/wechatpad_api/api/message.py
+index 52c7bdb572c777b0544e1785864b10ba02bd0cdd..46c75b9ff8fb9f103b1068967f39c701f1b5f18c 100644
+--- a/src/langbot/libs/wechatpad_api/api/message.py
++++ b/src/langbot/libs/wechatpad_api/api/message.py
+@@ -6,36 +6,30 @@ class MessageApi:
+         self.base_url = base_url
+         self.token = token
+ 
+-    def post_text(self, to_wxid, content, ats: list = []):
+-        """
+-
+-        Args:
+-            app_id: 微信id
+-            to_wxid: 发送方的微信id
+-            content: 内容
+-            ats: at
+-
+-        Returns:
+-
+-        """
++    def post_text(self, to_wxid, content, ats: list = [], *, client_id: str | None = None):
++        """Send text, optionally carrying a native bridge delivery identifier."""
+         url = self.base_url + '/message/SendTextMessage'
+-        """发送文字消息"""
+         json_data = {
+             'MsgItem': [
+                 {'AtWxIDList': ats, 'ImageContent': '', 'MsgType': 0, 'TextContent': content, 'ToUserName': to_wxid}
+             ]
+         }
++        if client_id is not None:
++            json_data['MsgItem'][0]['ClientMsgID'] = client_id
++            return post_json(base_url=url, token=self.token, data=json_data, timeout=180)
+         return post_json(base_url=url, token=self.token, data=json_data)
+ 
+-    def post_image(self, to_wxid, img_url, ats: list = []):
+-        """发送图片消息"""
+-        # 这里好像可以尝试发送多个暂时未测试
++    def post_image(self, to_wxid, img_url, ats: list = [], *, client_id: str | None = None):
++        """Send an image, optionally carrying a native bridge delivery identifier."""
+         json_data = {
+             'MsgItem': [
+                 {'AtWxIDList': ats, 'ImageContent': img_url, 'MsgType': 0, 'TextContent': '', 'ToUserName': to_wxid}
+             ]
+         }
+         url = self.base_url + '/message/SendImageMessage'
++        if client_id is not None:
++            json_data['MsgItem'][0]['ClientMsgID'] = client_id
++            return post_json(base_url=url, token=self.token, data=json_data, timeout=180)
+         return post_json(base_url=url, token=self.token, data=json_data)
+ 
+     def post_voice(self, to_wxid, voice_data, voice_forma, voice_duration):
+diff --git a/src/langbot/libs/wechatpad_api/client.py b/src/langbot/libs/wechatpad_api/client.py
+index bb9b2f54ef3c9314e151a20ddc3d278b30747bd6..0b077d6e70d908b0a1d0eb85d2cf5e62baa56bb9 100644
+--- a/src/langbot/libs/wechatpad_api/client.py
++++ b/src/langbot/libs/wechatpad_api/client.py
+@@ -36,12 +36,16 @@ class WeChatPadClient:
+         """获取登录状态"""
+         return self._login_api.get_login_status()
+ 
+-    def send_text_message(self, to_wxid, message, ats: list = []):
+-        """发送文本消息"""
++    def send_text_message(self, to_wxid, message, ats: list = [], *, client_id: str | None = None):
++        """Send text without changing the ordinary WeChatPad payload by default."""
++        if client_id is not None:
++            return self._message_api.post_text(to_wxid, message, ats, client_id=client_id)
+         return self._message_api.post_text(to_wxid, message, ats)
+ 
+-    def send_image_message(self, to_wxid, img_url, ats: list = []):
+-        """发送图片消息"""
++    def send_image_message(self, to_wxid, img_url, ats: list = [], *, client_id: str | None = None):
++        """Send an image with an optional native bridge delivery identifier."""
++        if client_id is not None:
++            return self._message_api.post_image(to_wxid, img_url, ats, client_id=client_id)
+         return self._message_api.post_image(to_wxid, img_url, ats)
+ 
+     def send_voice_message(self, to_wxid, voice_data, voice_forma, voice_duration):
+diff --git a/src/langbot/libs/wechatpad_api/util/http_util.py b/src/langbot/libs/wechatpad_api/util/http_util.py
+index 312afb41650ec463af6cf030b010bddf23b8e5b0..4b9b5a36f132f8559dc75dd8ee53edbeb404207f 100644
+--- a/src/langbot/libs/wechatpad_api/util/http_util.py
++++ b/src/langbot/libs/wechatpad_api/util/http_util.py
+@@ -25,7 +25,7 @@ def _read_requests_response_limited(response: requests.Response) -> dict:
+     return result
+ 
+ 
+-def post_json(base_url, token, data=None):
++def post_json(base_url, token, data=None, *, timeout=60):
+     headers = {'Content-Type': 'application/json'}
+ 
+     url = base_url + f'?key={token}'
+@@ -35,7 +35,7 @@ def post_json(base_url, token, data=None):
+             url,
+             json=data,
+             headers=headers,
+-            timeout=60,
++            timeout=timeout,
+             stream=True,
+         ) as response:
+             response.raise_for_status()
+diff --git a/src/langbot/pkg/pipeline/controller.py b/src/langbot/pkg/pipeline/controller.py
+index 3a57d760bb1b0631a39e8e5e039cca30ed746153..bf4c03ac12f9c1805044c184247d7bf942a73f2d 100644
+--- a/src/langbot/pkg/pipeline/controller.py
++++ b/src/langbot/pkg/pipeline/controller.py
+@@ -73,6 +73,8 @@ class Controller:
+     ):
+         """Revalidate a queued query immediately before runtime work starts."""
+ 
++        if (query.variables or {}).get('_native_delivery_status') == 'failed':
++            raise asyncio.CancelledError('Native bridge delivery was cancelled or timed out')
+         execution_context = get_query_execution_context(query)
+         binding = await self.ap.workspace_service.get_execution_binding(
+             execution_context.workspace_uuid,
+@@ -88,6 +90,8 @@ class Controller:
+     ) -> bool:
+         """Offer follow-up input to an active Runner before it queues."""
+ 
++        if isinstance(query.variables, dict) and '_native_delivery_status' in query.variables:
++            return False
+         try:
+             original_query = query
+             pipeline_uuid = query.pipeline_uuid
+@@ -153,6 +157,8 @@ class Controller:
+     ) -> None:
+         """Run one selected query and always release its scheduling slot."""
+ 
++        if isinstance(selected_query.variables, dict) and '_native_delivery_status' in selected_query.variables:
++            object.__setattr__(selected_query, '_native_delivery_task', asyncio.current_task())
+         try:
+             queued_context = get_query_execution_context(selected_query)
+ 
+diff --git a/src/langbot/pkg/pipeline/pipelinemgr.py b/src/langbot/pkg/pipeline/pipelinemgr.py
+index 218ba472a5b28b13f3e54c27a803e81c224f53e1..ca3d639b32fd228c24a3b35831b8a51f9483d542 100644
+--- a/src/langbot/pkg/pipeline/pipelinemgr.py
++++ b/src/langbot/pkg/pipeline/pipelinemgr.py
+@@ -171,6 +171,8 @@ class RuntimePipeline:
+     ) -> ExecutionContext:
+         """Fail closed when this runtime or query belongs to a stale placement."""
+ 
++        if query is not None and (query.variables or {}).get('_native_delivery_status') == 'failed':
++            raise asyncio.CancelledError('Native bridge delivery was cancelled or timed out')
+         execution_context = self.execution_context if query is None else get_query_execution_context(query)
+         if (
+             execution_context.instance_uuid != self.execution_context.instance_uuid
+@@ -592,7 +594,7 @@ class RuntimePipeline:
+ 
+     async def _process_query(self, query: pipeline_query.Query):
+         """Close monitoring on every exit, including cancellation and plugin veto."""
+-        from .monitoring_helper import MonitoringHelper
++        from .monitoring_helper import MonitoringHelper, get_handled_by, is_filtered_handler
+ 
+         status = 'error'
+         try:
+@@ -610,6 +612,13 @@ class RuntimePipeline:
+             except Exception as exc:
+                 self.ap.logger.error(f'Failed to finalize query {query.query_id}: {exc}')
+             finally:
++                if isinstance(query.variables, dict) and '_native_delivery_status' in query.variables:
++                    succeeded = (
++                        status == 'success'
++                        and query.variables['_native_delivery_status'] == 'pending'
++                        and not is_filtered_handler(get_handled_by(query))
++                    )
++                    query.variables['_native_delivery_status'] = 'completed' if succeeded else 'failed'
+                 await self.ap.query_pool.remove_query(query)
+ 
+     async def _process_query_body(self, query: pipeline_query.Query):
+diff --git a/src/langbot/pkg/platform/botmgr.py b/src/langbot/pkg/platform/botmgr.py
+index 251e67a1786a652c8274c6cb40237689ae8c1f3c..84b8412f4b69bc03c9736fc5ed333029e5556a5f 100644
+--- a/src/langbot/pkg/platform/botmgr.py
++++ b/src/langbot/pkg/platform/botmgr.py
+@@ -1110,6 +1110,16 @@ class RuntimeBot:
+             {'success': 'completed', 'skipped': 'ignored'}.get(outcome, 'failed'),
+             results,
+         )
++        if self._native_bridge_event_id(event, adapter) is not None:
++            failed = any(isinstance(result, BaseException) for result in results)
++            failed = (
++                failed or not results or not isinstance(results[0], dict) or results[0].get('status') != 'delivered'
++            )
++            failed = failed or any(
++                isinstance(result, dict) and result.get('status') in {'failed', 'discarded'} for result in results
++            )
++            if failed:
++                raise RuntimeError('Native bridge event delivery did not complete successfully')
+ 
+     async def _run_event_delivery(self, handler, *args, **kwargs):
+         # gather creates child tasks. Each delivery needs its own database scope;
+@@ -1176,7 +1186,10 @@ class RuntimeBot:
+     ) -> dict[str, typing.Any]:
+         event_type = getattr(event, 'type', None) or event.__class__.__name__
+ 
+-        if isinstance(event, platform_events.MessageReceivedEvent):
++        if (
++            isinstance(event, platform_events.MessageReceivedEvent)
++            and self._native_bridge_event_id(event, adapter) is None
++        ):
+             interaction_manager = getattr(getattr(self.ap, 'agent_run_orchestrator', None), 'interaction_manager', None)
+         else:
+             interaction_manager = None
+@@ -1210,6 +1223,16 @@ class RuntimeBot:
+             )
+ 
+         target_type = event_binding.get('target_type')
++        if self._native_bridge_event_id(event, adapter) is not None and target_type != 'pipeline':
++            return await self._record_event_route_trace(
++                event_type=event_type,
++                status='failed',
++                binding=event_binding,
++                target_type=target_type,
++                failure_code='processor_incompatible',
++                reason='Native bridge requires a Pipeline completion receipt',
++                text='Native bridge requires a Pipeline completion receipt',
++            )
+         from ..telemetry import trace as trace_mod
+ 
+         if target_type != 'discard':
+@@ -1506,6 +1529,34 @@ class RuntimeBot:
+         except Exception as e:
+             await self.logger.error(f'Failed to record discarded message: {e}')
+ 
++    @staticmethod
++    def _native_bridge_event_id(event, adapter) -> str | None:
++        if getattr(adapter, 'native_bridge_completion', False) is not True:
++            return None
++        source = getattr(event, 'source_platform_object', None)
++        value = source.get('_bridge_event_id') if isinstance(source, dict) else None
++        return value if isinstance(value, str) and 0 < len(value) <= 256 else None
++
++    async def _wait_native_query(self, query, adapter) -> None:
++        """Wait for a successful Pipeline terminal state, not queue removal alone."""
++        completed = asyncio.Event()
++        object.__setattr__(query, '_completion_event', completed)
++        timeout = getattr(adapter, 'native_bridge_completion_timeout', 300)
++        if type(timeout) not in (int, float) or not 0 < timeout <= 3600:
++            timeout = 300
++        try:
++            await asyncio.wait_for(completed.wait(), timeout=timeout)
++            if query.variables.get('_native_delivery_status') != 'completed':
++                raise RuntimeError('Native bridge Pipeline did not complete successfully')
++        except BaseException:
++            query.variables['_native_delivery_status'] = 'failed'
++            if not completed.is_set():
++                processing = getattr(query, '_native_delivery_task', None)
++                if processing is not None and processing is not asyncio.current_task() and not processing.done():
++                    processing.cancel()
++                await asyncio.shield(self.ap.query_pool.remove_query(query))
++            raise
++
+     async def _handle_legacy_message_event(
+         self,
+         event: platform_events.FriendMessage | platform_events.GroupMessage,
+@@ -1515,6 +1566,7 @@ class RuntimeBot:
+         variables: dict[str, typing.Any] | None = None,
+     ) -> None:
+         await self.assert_execution_active()
++        native = self._native_bridge_event_id(event, adapter) is not None
+         is_group_message = isinstance(event, platform_events.GroupMessage)
+         launcher_kind = 'group' if is_group_message else 'person'
+         launcher_type = (
+@@ -1551,6 +1603,8 @@ class RuntimeBot:
+                 )
+ 
+         if skip_pipeline:
++            if native:
++                raise RuntimeError('Native bridge requires Pipeline completion')
+             await self.logger.info(f'Pipeline skipped for {launcher_kind} message due to webhook response')
+             return
+ 
+@@ -1567,6 +1621,8 @@ class RuntimeBot:
+             routed_by_rule = routed_by_event_binding
+ 
+         if pipeline_uuid == self.PIPELINE_DISCARD:
++            if native:
++                raise RuntimeError('Native bridge message was discarded')
+             await self.logger.info(f'{launcher_kind.title()} message discarded by routing rule')
+             await self._record_discarded_message(
+                 launcher_type,
+@@ -1577,7 +1633,10 @@ class RuntimeBot:
+             )
+             return
+ 
+-        await self.ap.msg_aggregator.add_message(
++        enqueue = self.ap.query_pool.add_query if native else self.ap.msg_aggregator.add_message
++        if native:
++            variables = {**(variables or {}), '_native_delivery_status': 'pending'}
++        query = await enqueue(
+             bot_uuid=self.bot_entity.uuid,
+             launcher_type=launcher_type,
+             launcher_id=launcher_id,
+@@ -1590,6 +1649,8 @@ class RuntimeBot:
+             variables=variables,
+             execution_context=self.execution_context,
+         )
++        if native:
++            await self._wait_native_query(query, adapter)
+ 
+     async def _handle_interaction_submission(
+         self,
+diff --git a/src/langbot/pkg/platform/sources/wechatpad.py b/src/langbot/pkg/platform/sources/wechatpad.py
+index 9b3e40d7d67a68a4f98c2227c7279d7225df7207..801e119dc8c63cdc5d354d7b6ac394143987794b 100644
+--- a/src/langbot/pkg/platform/sources/wechatpad.py
++++ b/src/langbot/pkg/platform/sources/wechatpad.py
+@@ -1,12 +1,13 @@
+ import requests
+ import websocket
+ import json
++import hashlib
++from collections import OrderedDict
+ 
+ from langbot.libs.wechatpad_api.client import WeChatPadClient
+ 
+ import typing
+ import asyncio
+-import traceback
+ import re
+ import base64
+ import copy
+@@ -559,6 +560,10 @@ class WeChatPadAdapter(abstract_platform_adapter.AbstractMessagePlatformAdapter)
+         typing.Callable[[platform_events.Event, abstract_platform_adapter.AbstractMessagePlatformAdapter], None],
+     ] = {}
+     _MAX_CALLBACK_FUTURES = 100
++    _BRIDGE_ACK_TIMEOUT = 5
++    _MAX_BRIDGE_COMPLETED = 1000
++    native_bridge_completion: typing.ClassVar[bool] = True
++    native_bridge_completion_timeout: typing.ClassVar[float] = 300
+ 
+     def __init__(self, config: dict, logger: EventLogger):
+         quart_app = quart.Quart(__name__)
+@@ -583,36 +588,87 @@ class WeChatPadAdapter(abstract_platform_adapter.AbstractMessagePlatformAdapter)
+         self._stop_event = threading.Event()
+         self._callback_futures: set = set()
+         self._callback_futures_lock = threading.Lock()
++        self._bridge_closing_sockets: set = set()
++        self._bridge_reply_lock = threading.Lock()
++        self._bridge_inflight: dict[str, asyncio.Task] = {}
++        self._bridge_completed = OrderedDict()
+ 
+-    async def ws_message(self, data):
+-        """处理接收到的消息"""
++    @staticmethod
++    def _bridge_event_id(data):
++        value = data.get('_bridge_event_id') if isinstance(data, dict) else None
++        return value if isinstance(value, str) and 0 < len(value) <= 256 else None
++
++    async def _dispatch_ws_callback(self, data):
++        """Keep one mutable reply sequence on the source of a native delivery attempt."""
++        payload = data.copy()
++        event_id = self._bridge_event_id(payload)
++        if event_id is not None:
++            payload['_bridge_reply_sequence'] = 0
++        event = await self.event_converter.target2yiri(payload, self.bot_account_id)
++        if event is not None and event.__class__ in self.listeners:
++            await self.listeners[event.__class__](event, self)
++            return True
++        return False
+ 
++    def _finish_bridge_event(self, event_id, task):
++        if self._bridge_inflight.get(event_id) is task:
++            self._bridge_inflight.pop(event_id)
++        if task.cancelled():
++            return
+         try:
+-            event = await self.event_converter.target2yiri(data.copy(), self.bot_account_id)
++            handled = task.result()
+         except Exception:
+-            await self.logger.error(f'Error in wechatpad callback: {traceback.format_exc()}')
+-
+-        if event is not None and event.__class__ in self.listeners:
+-            await self.listeners[event.__class__](event, self)
++            return
++        if handled:
++            self._bridge_completed[event_id] = None
++            self._bridge_completed.move_to_end(event_id)
++            while len(self._bridge_completed) > self._MAX_BRIDGE_COMPLETED:
++                self._bridge_completed.popitem(last=False)
++
++    async def ws_message(self, data, ws=None):
++        """Join native replays and ACK only after the shared delivery callback completes."""
++        event_id = self._bridge_event_id(data)
++        if event_id is None:
++            await self._dispatch_ws_callback(data)
++        else:
++            if event_id in self._bridge_completed:
++                self._bridge_completed.move_to_end(event_id)
++                handled = True
++            else:
++                task = self._bridge_inflight.get(event_id)
++                if task is None:
++                    task = asyncio.create_task(self._dispatch_ws_callback(data))
++                    self._bridge_inflight[event_id] = task
++                    task.add_done_callback(lambda completed: self._finish_bridge_event(event_id, completed))
++                handled = await asyncio.shield(task)
++            socket = ws if ws is not None else self._ws_app
++            if handled and socket is not None and not self._stop_event.is_set():
++                await asyncio.wait_for(
++                    asyncio.to_thread(socket.send, json.dumps({'type': 'ack', 'event_id': event_id})),
++                    timeout=self._BRIDGE_ACK_TIMEOUT,
++                )
+ 
+         return 'ok'
+ 
+-    async def _handle_message(self, message: platform_message.MessageChain, target_id: str):
+-        """统一消息处理核心逻辑"""
++    async def _handle_message(
++        self,
++        message: platform_message.MessageChain,
++        target_id: str,
++        *,
++        bridge_event_id: str | None = None,
++        bridge_reply_sequence: int = 0,
++    ):
++        """Send components and surface explicit transport or API delivery failures."""
+         content_list = await self.message_converter.yiri2target(message)
+-        # print(content_list)
+         at_targets = [item['target'] for item in content_list if item['type'] == 'at']
+-        # print(at_targets)
+-        # 处理@逻辑
+         at_targets = at_targets or []
+         member_info = []
+         if at_targets:
+             member_result = await asyncio.to_thread(self.bot.get_chatroom_member_detail, target_id)
+             member_info = member_result['Data']['member_data']['chatroom_member_list']
+ 
+-        # 处理消息组件
++        send_index = 0
+         for msg in content_list:
+-            # 文本消息处理@
+             if msg['type'] == 'text' and at_targets:
+                 if 'all' in at_targets:
+                     msg['content'] = f'@所有人 {msg["content"]}'
+@@ -623,13 +679,28 @@ class WeChatPadAdapter(abstract_platform_adapter.AbstractMessagePlatformAdapter)
+                             at_nick_name_list.append(f'@{member["nick_name"]}')
+                     msg['content'] = f'{" ".join(at_nick_name_list)} {msg["content"]}'
+ 
+-            # 统一消息派发
++            delivery_args = {}
++            if bridge_event_id is not None and msg['type'] in ('text', 'image'):
++                identity = json.dumps(
++                    [bridge_event_id, bridge_reply_sequence, send_index],
++                    ensure_ascii=False,
++                    sort_keys=True,
++                    separators=(',', ':'),
++                )
++                delivery_args['client_id'] = 'native-' + hashlib.sha256(identity.encode('utf-8')).hexdigest()
++
+             handler_map = {
+                 'text': lambda msg: self.bot.send_text_message(
+-                    to_wxid=target_id, message=msg['content'], ats=['notify@all'] if 'all' in at_targets else at_targets
++                    to_wxid=target_id,
++                    message=msg['content'],
++                    ats=['notify@all'] if 'all' in at_targets else at_targets,
++                    **delivery_args,
+                 ),
+                 'image': lambda msg: self.bot.send_image_message(
+-                    to_wxid=target_id, img_url=msg['image'], ats=['notify@all'] if 'all' in at_targets else at_targets
++                    to_wxid=target_id,
++                    img_url=msg['image'],
++                    ats=['notify@all'] if 'all' in at_targets else at_targets,
++                    **delivery_args,
+                 ),
+                 'WeChatEmoji': lambda msg: self.bot.send_emoji_message(
+                     to_wxid=target_id, emoji_md5=msg['emoji_md5'], emoji_size=msg['emoji_size']
+@@ -645,36 +716,84 @@ class WeChatPadAdapter(abstract_platform_adapter.AbstractMessagePlatformAdapter)
+                     app_message=msg['app_msg'],
+                     type=0,
+                 ),
+-                'at': lambda msg: None,
+             }
+ 
++            if msg['type'] == 'at':
++                continue
+             if handler := handler_map.get(msg['type']):
+-                await asyncio.to_thread(handler, msg)
++                try:
++                    response = await asyncio.to_thread(handler, msg)
++                except Exception:
++                    raise RuntimeError('WeChatPad send failed') from None
++                if not isinstance(response, dict):
++                    raise RuntimeError('WeChatPad send returned an invalid response')
++                if 'Code' in response and (isinstance(response['Code'], bool) or response['Code'] not in (0, 200)):
++                    raise RuntimeError('WeChatPad send was rejected')
++                send_index += 1
+             else:
+                 await self.logger.warning(f'未处理的消息类型: {msg["type"]}')
+                 continue
+ 
+-    def _schedule_ws_message(self, data: dict) -> None:
++    async def _close_bridge_origin(self, ws):
++        """Use cleanup capacity so overload can still close the affected connection."""
++        await bounded_executor.run_blocking_cleanup(ws.close, timeout=3)
++
++    def _request_bridge_replay(self, ws):
++        """Coalesce one tracked close per origin without touching a newer connection."""
+         loop = self._event_loop
+-        if loop is None or loop.is_closed() or self._stop_event.is_set():
++        if ws is None or loop is None or loop.is_closed() or self._stop_event.is_set():
+             return
+         with self._callback_futures_lock:
+-            if len(self._callback_futures) >= self._MAX_CALLBACK_FUTURES:
++            if ws in self._bridge_closing_sockets:
+                 return
+-            future = asyncio.run_coroutine_threadsafe(self.ws_message(data), loop)
++            self._bridge_closing_sockets.add(ws)
++            future = asyncio.run_coroutine_threadsafe(self._close_bridge_origin(ws), loop)
+             self._callback_futures.add(future)
+ 
++        def done(completed):
++            with self._callback_futures_lock:
++                self._callback_futures.discard(completed)
++                self._bridge_closing_sockets.discard(ws)
++            if not completed.cancelled():
++                try:
++                    completed.result()
++                except Exception:
++                    logging.getLogger(__name__).warning('WeChatPad replay reconnect failed')
++
++        future.add_done_callback(done)
++
++    def _schedule_ws_message(self, data: dict, ws=None) -> None:
++        loop = self._event_loop
++        if loop is None or loop.is_closed() or self._stop_event.is_set():
++            return
++        origin = ws if ws is not None else self._ws_app
++        native = self._bridge_event_id(data) is not None
++        with self._callback_futures_lock:
++            if len(self._callback_futures) >= self._MAX_CALLBACK_FUTURES:
++                future = None
++            else:
++                future = asyncio.run_coroutine_threadsafe(self.ws_message(data, origin), loop)
++                self._callback_futures.add(future)
++        if future is None:
++            if native:
++                self._request_bridge_replay(origin)
++            return
++
+         def done(completed) -> None:
+             with self._callback_futures_lock:
+                 self._callback_futures.discard(completed)
+             if completed.cancelled():
++                if native:
++                    self._request_bridge_replay(origin)
+                 return
+             try:
+                 completed.result()
+             except asyncio.CancelledError:
+                 pass
+             except Exception:
+-                logging.getLogger(__name__).exception('WeChatPad callback failed')
++                logging.getLogger(__name__).warning('WeChatPad callback failed')
++                if native:
++                    self._request_bridge_replay(origin)
+ 
+         future.add_done_callback(done)
+ 
+@@ -688,9 +807,19 @@ class WeChatPadAdapter(abstract_platform_adapter.AbstractMessagePlatformAdapter)
+         message: platform_message.MessageChain,
+         quote_origin: bool = False,
+     ):
+-        """回复消息"""
++        """Use stable delivery identifiers only for native bridge replies."""
+         if message_source.source_platform_object:
+             target_id = message_source.source_platform_object['from_user_name']['str']
++            event_id = self._bridge_event_id(message_source.source_platform_object)
++            if event_id is not None:
++                with self._bridge_reply_lock:
++                    sequence = message_source.source_platform_object.get('_bridge_reply_sequence', 0)
++                    if type(sequence) is not int or sequence < 0:
++                        sequence = 0
++                    message_source.source_platform_object['_bridge_reply_sequence'] = sequence + 1
++                return await self._handle_message(
++                    message, target_id, bridge_event_id=event_id, bridge_reply_sequence=sequence
++                )
+             return await self._handle_message(message, target_id)
+ 
+     async def is_muted(self, group_id: int) -> bool:
+@@ -763,12 +892,12 @@ class WeChatPadAdapter(abstract_platform_adapter.AbstractMessagePlatformAdapter)
+                         logging.getLogger(__name__).warning('WeChatPad WebSocket message exceeds the size limit')
+                         return
+                     data = json.loads(message)
+-                    self._schedule_ws_message(data)
++                    self._schedule_ws_message(data, ws)
+                 except json.JSONDecodeError:
+                     logging.getLogger(__name__).warning('WeChatPad received a non-JSON message')
+ 
+             def on_error(ws, error):
+-                logging.getLogger(__name__).warning('WeChatPad WebSocket error: %s', str(error)[:200])
++                logging.getLogger(__name__).warning('WeChatPad WebSocket error')
+ 
+             def on_close(ws, close_status_code, close_msg):
+                 logging.getLogger(__name__).info('WeChatPad WebSocket closed')
+@@ -817,6 +946,13 @@ class WeChatPadAdapter(abstract_platform_adapter.AbstractMessagePlatformAdapter)
+                 *(asyncio.wrap_future(future) for future in futures),
+                 return_exceptions=True,
+             )
++        processing = list(self._bridge_inflight.values())
++        for task in processing:
++            task.cancel()
++        if processing:
++            await asyncio.gather(*processing, return_exceptions=True)
++        self._bridge_inflight.clear()
++        self._bridge_completed.clear()
+ 
+         thread = self._ws_thread
+         if thread is not None and thread.is_alive():
+diff --git a/tests/unit_tests/platform/test_wechatpad_bridge_delivery.py b/tests/unit_tests/platform/test_wechatpad_bridge_delivery.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..a1df313975ba35b66ad8b0c0f750123178c73be7
+--- /dev/null
++++ b/tests/unit_tests/platform/test_wechatpad_bridge_delivery.py
+@@ -0,0 +1,517 @@
++from __future__ import annotations
++
++import asyncio
++import importlib
++import json
++import sys
++import threading
++from types import SimpleNamespace
++from unittest.mock import AsyncMock, MagicMock, Mock, patch
++
++import pytest
++
++from langbot.libs.wechatpad_api.api import message as message_api
++from langbot.libs.wechatpad_api.client import WeChatPadClient
++from langbot.libs.wechatpad_api.util import http_util
++from langbot_plugin.api.definition.abstract.platform.event_logger import AbstractEventLogger
++from langbot_plugin.api.entities.builtin.platform import events as platform_events
++from langbot_plugin.api.entities.builtin.platform import message as platform_message
++
++
++# The concrete logger eagerly imports the application; protocol unit tests need only its interface.
++with patch.dict(sys.modules, {'langbot.pkg.platform.logger': SimpleNamespace(EventLogger=AbstractEventLogger)}):
++    wechatpad = importlib.import_module('langbot.pkg.platform.sources.wechatpad')
++
++
++class DummyLogger(AbstractEventLogger):
++    async def info(self, *args, **kwargs):
++        pass
++
++    async def debug(self, *args, **kwargs):
++        pass
++
++    async def warning(self, *args, **kwargs):
++        pass
++
++    async def error(self, *args, **kwargs):
++        pass
++
++
++class Socket:
++    def __init__(self):
++        self.sent = []
++        self.threads = []
++        self.closed = False
++
++    def send(self, value):
++        self.threads.append(threading.get_ident())
++        self.sent.append(json.loads(value))
++
++    def close(self, **kwargs):
++        self.closed = True
++
++
++def native_event(event_id='event-1'):
++    value = {
++        'from_user_name': {'str': 'wxid_sender'},
++        'to_user_name': {'str': 'wxid_self'},
++        'content': {'str': 'synthetic message'},
++        'create_time': 123,
++        'msg_type': 1,
++    }
++    if event_id is not None:
++        value['_bridge_event_id'] = event_id
++    return value
++
++
++def text_chain(*parts):
++    return platform_message.MessageChain([platform_message.Plain(text=part) for part in parts])
++
++
++@pytest.fixture
++def adapter():
++    value = wechatpad.WeChatPadAdapter(
++        {'wechatpad_url': 'https://example.invalid', 'token': 'private-token', 'wxid': 'wxid_self'},
++        DummyLogger(),
++    )
++    value._ws_app = Socket()
++    return value
++
++
++@pytest.mark.parametrize(
++    'method,args', [('post_text', ('wxid_peer', 'hello')), ('post_image', ('wxid_peer', 'aW1hZ2U='))]
++)
++def test_sdk_client_id_is_optional_and_only_added_when_supplied(monkeypatch, method, args):
++    post = Mock(return_value={'Code': 200})
++    monkeypatch.setattr(message_api, 'post_json', post)
++    api = message_api.MessageApi('https://example.invalid', 'private-token')
++    getattr(api, method)(*args)
++    assert 'ClientMsgID' not in post.call_args.kwargs['data']['MsgItem'][0]
++    assert 'timeout' not in post.call_args.kwargs
++    getattr(api, method)(*args, client_id='delivery-1')
++    assert post.call_args.kwargs['data']['MsgItem'][0]['ClientMsgID'] == 'delivery-1'
++    assert post.call_args.kwargs['timeout'] == 180
++
++
++@pytest.mark.parametrize('kwargs,expected_timeout', [({}, 60), ({'timeout': 180}, 180)])
++def test_post_json_keeps_legacy_timeout_and_accepts_explicit_override(monkeypatch, kwargs, expected_timeout):
++    response = MagicMock(headers={})
++    response.__enter__.return_value = response
++    response.iter_content.return_value = [b'{"Code":200}']
++    post = Mock(return_value=response)
++    monkeypatch.setattr(http_util.requests, 'post', post)
++    assert http_util.post_json('https://example.invalid', 'synthetic', {'message': 'text'}, **kwargs) == {'Code': 200}
++    assert post.call_args.kwargs['timeout'] == expected_timeout
++    assert post.call_args.kwargs['stream'] is True
++    response.raise_for_status.assert_called_once_with()
++    response.iter_content.assert_called_once_with(chunk_size=64 * 1024)
++    response.__exit__.assert_called_once()
++
++
++@pytest.mark.parametrize('method,payload', [('post_text', 'hello'), ('post_image', 'aW1hZ2U=')])
++@pytest.mark.parametrize('native', [False, True])
++def test_real_sdk_transport_extends_timeout_only_for_native_delivery(monkeypatch, method, payload, native):
++    response = MagicMock(headers={})
++    response.__enter__.return_value = response
++    response.iter_content.return_value = [b'{"Code":200}']
++    post = Mock(return_value=response)
++    monkeypatch.setattr(http_util.requests, 'post', post)
++    api = message_api.MessageApi('https://example.invalid', 'synthetic')
++    kwargs = {'client_id': 'native-delivery'} if native else {}
++    assert getattr(api, method)('wxid_peer', payload, **kwargs) == {'Code': 200}
++    assert post.call_args.kwargs['timeout'] == (180 if native else 60)
++    assert post.call_args.kwargs['stream'] is True
++    item = post.call_args.kwargs['json']['MsgItem'][0]
++    assert item.get('ClientMsgID') == ('native-delivery' if native else None)
++
++
++@pytest.mark.parametrize('kind', ['text', 'image'])
++def test_client_forwards_optional_id_without_changing_legacy_calls(monkeypatch, kind):
++    client = WeChatPadClient('https://example.invalid', 'private-token')
++    api = Mock(return_value={'Code': 200})
++    monkeypatch.setattr(client._message_api, 'post_' + kind, api)
++    method = getattr(client, 'send_' + kind + '_message')
++    method('wxid_peer', 'payload')
++    api.assert_called_once_with('wxid_peer', 'payload', [])
++    method('wxid_peer', 'payload', client_id='delivery-1')
++    assert api.call_args.kwargs == {'client_id': 'delivery-1'}
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize('response', [None, [], 'ok', {'Code': 409}, {'Code': 501}, {'Code': -2}, {'Code': None}])
++async def test_actual_send_rejects_invalid_or_failed_response(adapter, response):
++    adapter.bot.send_text_message = Mock(return_value=response)
++    with pytest.raises(RuntimeError, match='WeChatPad'):
++        await adapter.send_message('person', 'wxid_peer', text_chain('hello'))
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize('response', [{'Code': 0}, {'Code': 200}, {'Data': {'legacy': True}}])
++async def test_success_and_legacy_dictionary_responses_remain_compatible(adapter, response):
++    adapter.bot.send_text_message = Mock(return_value=response)
++    await adapter.send_message('person', 'wxid_peer', text_chain('hello'))
++    assert 'client_id' not in adapter.bot.send_text_message.call_args.kwargs
++
++
++@pytest.mark.asyncio
++async def test_native_reply_ids_are_stable_and_distinguish_chunks_and_components(adapter, monkeypatch):
++    post = Mock(return_value={'Code': 200})
++    monkeypatch.setattr(message_api, 'post_json', post)
++    event = SimpleNamespace(source_platform_object=native_event())
++    chain = platform_message.MessageChain(
++        [
++            platform_message.Plain(text='first'),
++            platform_message.Image(base64='aW1hZ2U='),
++            platform_message.Plain(text='first'),
++        ]
++    )
++    await adapter.reply_message(event, chain)
++    first = [call.kwargs['data']['MsgItem'][0]['ClientMsgID'] for call in post.call_args_list]
++    assert len(set(first)) == 3
++    post.reset_mock()
++    await adapter.reply_message(SimpleNamespace(source_platform_object=native_event()), chain)
++    assert first == [call.kwargs['data']['MsgItem'][0]['ClientMsgID'] for call in post.call_args_list]
++    await adapter.reply_message(event, text_chain('different streaming chunk'))
++    assert post.call_args.kwargs['data']['MsgItem'][0]['ClientMsgID'] not in first
++    await adapter.reply_message(SimpleNamespace(source_platform_object=native_event('event-2')), text_chain('first'))
++    assert post.call_args.kwargs['data']['MsgItem'][0]['ClientMsgID'] not in first
++
++
++@pytest.mark.asyncio
++async def test_image_delivery_ids_distinguish_separate_reply_intents(adapter, monkeypatch):
++    post = Mock(return_value={'Code': 200})
++    monkeypatch.setattr(message_api, 'post_json', post)
++    adapter.bot.get_chatroom_member_detail = Mock(
++        return_value={
++            'Data': {'member_data': {'chatroom_member_list': []}},
++        }
++    )
++    source = SimpleNamespace(source_platform_object=native_event())
++    for mention in ('wxid_one', 'wxid_two'):
++        chain = platform_message.MessageChain(
++            [
++                platform_message.At(target=mention),
++                platform_message.Image(base64='aW1hZ2U='),
++            ]
++        )
++        await adapter.reply_message(source, chain)
++    identifiers = [call.kwargs['data']['MsgItem'][0]['ClientMsgID'] for call in post.call_args_list]
++    assert identifiers[0] != identifiers[1]
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize(
++    'replacement',
++    [text_chain('regenerated answer'), platform_message.MessageChain([platform_message.Image(base64='aW1hZ2U=')])],
++)
++async def test_native_replay_keeps_uncertain_send_id_when_generated_payload_changes(adapter, monkeypatch, replacement):
++    ledger = {}
++    actual_sends = []
++    seen_ids = []
++
++    def transport(*, base_url, token, data, timeout=60):
++        assert timeout == 180
++        item = data['MsgItem'][0]
++        identifier = item['ClientMsgID']
++        seen_ids.append(identifier)
++        if identifier in ledger:
++            assert ledger[identifier] != item
++            return {'Code': 409, 'Data': {'status': 'uncertain'}}
++        ledger[identifier] = item.copy()
++        actual_sends.append(item.copy())
++        raise TimeoutError('response lost after native send')
++
++    monkeypatch.setattr(message_api, 'post_json', transport)
++    outputs = iter([text_chain('first answer'), replacement])
++
++    async def callback(event, source):
++        await source.reply_message(event, next(outputs))
++
++    adapter.listeners[platform_events.FriendMessage] = callback
++    for _ in range(2):
++        with pytest.raises(RuntimeError, match='WeChatPad'):
++            await adapter.ws_message(native_event())
++    assert len(actual_sends) == 1
++    assert seen_ids[0] == seen_ids[1]
++
++
++@pytest.mark.asyncio
++async def test_reply_sequence_resets_per_delivery_and_is_safe_for_concurrent_replies(adapter, monkeypatch):
++    captured = []
++    attempts = 0
++
++    def transport(**kwargs):
++        captured.append(kwargs['data']['MsgItem'][0])
++        return {'Code': 200}
++
++    monkeypatch.setattr(message_api, 'post_json', transport)
++
++    async def callback(event, source):
++        nonlocal attempts
++        await asyncio.gather(
++            source.reply_message(event, text_chain('alpha')), source.reply_message(event, text_chain('beta'))
++        )
++        attempts += 1
++        if attempts == 1:
++            raise RuntimeError('failed after replies')
++
++    adapter.listeners[platform_events.FriendMessage] = callback
++    with pytest.raises(RuntimeError):
++        await adapter.ws_message(native_event())
++    await adapter.ws_message(native_event())
++    identities = {
++        text: [item['ClientMsgID'] for item in captured if item['TextContent'] == text] for text in ('alpha', 'beta')
++    }
++    assert identities['alpha'][0] != identities['beta'][0]
++    assert all(len(values) == 2 and len(set(values)) == 1 for values in identities.values())
++
++
++@pytest.mark.asyncio
++async def test_native_replay_waits_for_one_inflight_callback_and_acks_each_origin(adapter):
++    entered = asyncio.Event()
++    release = asyncio.Event()
++
++    async def callback(event, source):
++        entered.set()
++        await release.wait()
++
++    listener = AsyncMock(side_effect=callback)
++    adapter.listeners[platform_events.FriendMessage] = listener
++    first, second = Socket(), Socket()
++    initial = asyncio.create_task(adapter.ws_message(native_event(), first))
++    await asyncio.wait_for(entered.wait(), 1)
++    replay = asyncio.create_task(adapter.ws_message(native_event(), second))
++    await asyncio.sleep(0.01)
++    assert listener.await_count == 1
++    assert first.sent == second.sent == []
++    release.set()
++    await asyncio.gather(initial, replay)
++    assert first.sent == second.sent == [{'type': 'ack', 'event_id': 'event-1'}]
++
++
++@pytest.mark.asyncio
++async def test_callback_completion_is_retained_when_ack_is_lost(adapter):
++    listener = AsyncMock()
++    adapter.listeners[platform_events.FriendMessage] = listener
++    lost = Socket()
++    lost.send = Mock(side_effect=TimeoutError('lost ACK'))
++    with pytest.raises(TimeoutError):
++        await adapter.ws_message(native_event(), lost)
++    replay = Socket()
++    await adapter.ws_message(native_event(), replay)
++    assert listener.await_count == 1
++    assert replay.sent == [{'type': 'ack', 'event_id': 'event-1'}]
++
++
++@pytest.mark.asyncio
++async def test_cancelled_waiter_does_not_cancel_shared_native_processing(adapter):
++    entered = asyncio.Event()
++    release = asyncio.Event()
++
++    async def callback(event, source):
++        entered.set()
++        await release.wait()
++
++    listener = AsyncMock(side_effect=callback)
++    adapter.listeners[platform_events.FriendMessage] = listener
++    first = asyncio.create_task(adapter.ws_message(native_event(), Socket()))
++    await entered.wait()
++    replay_socket = Socket()
++    replay = asyncio.create_task(adapter.ws_message(native_event(), replay_socket))
++    await asyncio.sleep(0.01)
++    first.cancel()
++    with pytest.raises(asyncio.CancelledError):
++        await first
++    release.set()
++    await replay
++    assert listener.await_count == 1
++    assert replay_socket.sent == [{'type': 'ack', 'event_id': 'event-1'}]
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize('failure', ['callback', 'ack', 'cancelled'])
++async def test_native_processing_failure_closes_only_origin_for_replay(adapter, failure):
++    adapter._event_loop = asyncio.get_running_loop()
++    origin = adapter._ws_app
++    if failure == 'callback':
++        adapter.listeners[platform_events.FriendMessage] = AsyncMock(side_effect=RuntimeError('callback failed'))
++    elif failure == 'cancelled':
++        adapter.listeners[platform_events.FriendMessage] = AsyncMock(side_effect=asyncio.CancelledError())
++    else:
++        adapter.listeners[platform_events.FriendMessage] = AsyncMock()
++        origin.send = Mock(side_effect=TimeoutError('ACK failed'))
++    adapter._schedule_ws_message(native_event(), origin)
++    adapter._ws_app = Socket()
++    for _ in range(100):
++        if origin.closed and not adapter._callback_futures:
++            break
++        await asyncio.sleep(0.01)
++    assert origin.closed
++    assert not adapter._ws_app.closed
++    assert not adapter._callback_futures
++
++
++@pytest.mark.asyncio
++async def test_native_overload_coalesces_nonblocking_origin_close_for_replay(adapter, monkeypatch):
++    adapter._event_loop = asyncio.get_running_loop()
++    monkeypatch.setattr(adapter, '_MAX_CALLBACK_FUTURES', 0)
++    origin = adapter._ws_app
++    entered = threading.Event()
++    release = threading.Event()
++
++    def close(**kwargs):
++        entered.set()
++        release.wait(timeout=2)
++        origin.closed = True
++
++    monkeypatch.setattr(origin, 'close', close)
++    for _ in range(50):
++        adapter._schedule_ws_message(native_event(), origin)
++    adapter._ws_app = Socket()
++    try:
++        assert await asyncio.to_thread(entered.wait, 1)
++        await asyncio.wait_for(asyncio.sleep(0), 0.5)
++        assert len(adapter._callback_futures) == 1
++    finally:
++        release.set()
++    for _ in range(100):
++        if not adapter._callback_futures:
++            break
++        await asyncio.sleep(0.01)
++    assert origin.closed
++    assert not adapter._ws_app.closed
++
++
++@pytest.mark.asyncio
++async def test_ordinary_failure_and_overload_keep_existing_connection_behavior(adapter, monkeypatch):
++    adapter._event_loop = asyncio.get_running_loop()
++    origin = adapter._ws_app
++    adapter.listeners[platform_events.FriendMessage] = AsyncMock(side_effect=RuntimeError('legacy callback failure'))
++    adapter._schedule_ws_message(native_event(None), origin)
++    for _ in range(100):
++        if not adapter._callback_futures:
++            break
++        await asyncio.sleep(0.01)
++    monkeypatch.setattr(adapter, '_MAX_CALLBACK_FUTURES', 0)
++    adapter._schedule_ws_message(native_event(None), origin)
++    await asyncio.sleep(0.01)
++    assert not origin.closed
++
++
++@pytest.mark.asyncio
++async def test_ordinary_reply_does_not_add_protocol_extension(adapter, monkeypatch):
++    post = Mock(return_value={'Code': 200})
++    monkeypatch.setattr(message_api, 'post_json', post)
++    await adapter.reply_message(SimpleNamespace(source_platform_object=native_event(None)), text_chain('hello'))
++    assert 'ClientMsgID' not in post.call_args.kwargs['data']['MsgItem'][0]
++
++
++@pytest.mark.asyncio
++async def test_ack_is_sent_off_loop_only_after_successful_callback(adapter):
++    entered = asyncio.Event()
++    release = asyncio.Event()
++
++    async def callback(event, source):
++        assert event.source_platform_object['_bridge_event_id'] == 'event-1'
++        entered.set()
++        await release.wait()
++
++    adapter.listeners[platform_events.FriendMessage] = callback
++    task = asyncio.create_task(adapter.ws_message(native_event()))
++    await asyncio.wait_for(entered.wait(), 1)
++    assert adapter._ws_app.sent == []
++    release.set()
++    await asyncio.wait_for(task, 1)
++    assert adapter._ws_app.sent == [{'type': 'ack', 'event_id': 'event-1'}]
++    assert adapter._ws_app.threads != [threading.get_ident()]
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize('failure', [RuntimeError('failed'), asyncio.CancelledError()])
++async def test_failed_or_cancelled_callback_never_acks(adapter, failure):
++    adapter.listeners[platform_events.FriendMessage] = AsyncMock(side_effect=failure)
++    with pytest.raises(type(failure)):
++        await adapter.ws_message(native_event())
++    assert adapter._ws_app.sent == []
++
++
++@pytest.mark.asyncio
++async def test_ignored_events_and_ordinary_protocol_do_not_ack(adapter):
++    await adapter.ws_message(native_event())
++    adapter.listeners[platform_events.FriendMessage] = AsyncMock()
++    await adapter.ws_message(native_event(None))
++    assert adapter._ws_app.sent == []
++
++
++@pytest.mark.asyncio
++async def test_scheduled_callback_keeps_origin_socket_and_is_lifecycle_tracked(adapter):
++    adapter._event_loop = asyncio.get_running_loop()
++    adapter.listeners[platform_events.FriendMessage] = AsyncMock()
++    origin = adapter._ws_app
++    adapter._schedule_ws_message(native_event(), origin)
++    adapter._ws_app = Socket()
++    for _ in range(100):
++        if origin.sent and not adapter._callback_futures:
++            break
++        await asyncio.sleep(0.01)
++    assert origin.sent == [{'type': 'ack', 'event_id': 'event-1'}]
++    assert not adapter._callback_futures
++
++
++@pytest.mark.asyncio
++async def test_ack_send_timeout_is_bounded_and_does_not_block_loop(adapter, monkeypatch):
++    entered = threading.Event()
++    release = threading.Event()
++
++    def blocked_send(value):
++        entered.set()
++        release.wait(timeout=2)
++
++    adapter.listeners[platform_events.FriendMessage] = AsyncMock()
++    monkeypatch.setattr(adapter._ws_app, 'send', blocked_send)
++    monkeypatch.setattr(adapter, '_BRIDGE_ACK_TIMEOUT', 0.03)
++    task = asyncio.create_task(adapter.ws_message(native_event()))
++    try:
++        assert await asyncio.to_thread(entered.wait, 1)
++        await asyncio.wait_for(asyncio.sleep(0), 0.5)
++        with pytest.raises(TimeoutError):
++            await asyncio.wait_for(task, 1)
++    finally:
++        release.set()
++
++
++@pytest.mark.asyncio
++async def test_kill_cancels_waiting_callback_without_ack(adapter):
++    entered = asyncio.Event()
++
++    async def callback(event, source):
++        entered.set()
++        await asyncio.Event().wait()
++
++    adapter._event_loop = asyncio.get_running_loop()
++    adapter.listeners[platform_events.FriendMessage] = callback
++    socket = adapter._ws_app
++    adapter._schedule_ws_message(native_event())
++    await asyncio.wait_for(entered.wait(), 1)
++    assert adapter._callback_futures
++    await asyncio.wait_for(adapter.kill(), 1)
++    await asyncio.sleep(0.01)
++    assert socket.closed
++    assert socket.sent == []
++    assert not adapter._callback_futures
++
++
++@pytest.mark.asyncio
++async def test_callback_error_log_does_not_include_url_or_token(adapter, caplog):
++    adapter._event_loop = asyncio.get_running_loop()
++    adapter.listeners[platform_events.FriendMessage] = AsyncMock(
++        side_effect=RuntimeError('https://example.invalid/path?key=private-token')
++    )
++    adapter._schedule_ws_message(native_event())
++    for _ in range(100):
++        if caplog.records and not adapter._callback_futures:
++            break
++        await asyncio.sleep(0.01)
++    assert 'callback failed' in caplog.text
++    assert 'private-token' not in caplog.text
++    assert 'https://' not in caplog.text
+diff --git a/tests/unit_tests/platform/test_wechatpad_native_completion.py b/tests/unit_tests/platform/test_wechatpad_native_completion.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..8bf67bf3bfbafb2a0b854e81b95184d25ccdbe73
+--- /dev/null
++++ b/tests/unit_tests/platform/test_wechatpad_native_completion.py
+@@ -0,0 +1,341 @@
++"""Native bridge ACKs cross the actual QueryPool and RuntimePipeline boundary."""
++
++from __future__ import annotations
++
++import asyncio
++import copy
++from types import SimpleNamespace
++from unittest.mock import AsyncMock, Mock
++
++import pytest
++
++from langbot.pkg.api.http.context import ExecutionContext
++
++from langbot.pkg.pipeline.controller import Controller
++from langbot.pkg.pipeline.entities import ResultType, StageProcessResult
++from langbot.pkg.pipeline.monitoring_helper import MonitoringHelper
++from langbot.pkg.pipeline.pipelinemgr import RuntimePipeline
++from langbot.pkg.pipeline.pool import QueryPool
++from langbot.pkg.pipeline.respback.respback import SendResponseBackStage
++from langbot.pkg.platform.botmgr import RuntimeBot
++from tests.unit_tests.platform.test_wechatpad_bridge_delivery import (
++    DummyLogger,
++    Socket,
++    native_event,
++    platform_events,
++    text_chain,
++    wechatpad,
++)
++
++
++@pytest.fixture
++def harness(monkeypatch):
++    pool = QueryPool()
++    adapter = wechatpad.WeChatPadAdapter(
++        {'wechatpad_url': 'https://example.invalid', 'token': 'synthetic', 'wxid': 'wxid_self'}, DummyLogger()
++    )
++    monkeypatch.setattr(type(adapter), 'native_bridge_completion', True)
++    adapter._ws_app = Socket()
++    adapter.bot.send_text_message = Mock(return_value={'Code': 200})
++    context = ExecutionContext(
++        instance_uuid='instance', workspace_uuid='workspace', placement_generation=1, bot_uuid='bot'
++    )
++    app = SimpleNamespace(
++        query_pool=pool,
++        logger=Mock(),
++        msg_aggregator=SimpleNamespace(add_message=AsyncMock()),
++        webhook_pusher=None,
++        plugin_connector=SimpleNamespace(),
++    )
++
++    async def emit_event(event, plugins):
++        return SimpleNamespace(
++            is_prevented_default=lambda: False, event=SimpleNamespace(message_chain=event.message_chain)
++        )
++
++    app.plugin_connector.emit_event = emit_event
++    bot = object.__new__(RuntimeBot)
++    bot.ap, bot.bot_entity, bot.execution_context = app, SimpleNamespace(uuid='bot', plugin_processors=[]), context
++    bot.logger = DummyLogger()
++    bot.assert_execution_active = AsyncMock()
++    bot._record_adapter_event = AsyncMock()
++    bot._persist_monitoring_ingress = AsyncMock()
++    bot._record_platform_event = Mock()
++    bot._resolve_eba_event_binding = Mock(return_value={'target_type': 'pipeline', 'target_uuid': 'pipeline'})
++    bot._pipeline_target_exists = AsyncMock(return_value=True)
++
++    async def record_route(**kwargs):
++        return {'status': kwargs['status']}
++
++    bot._record_event_route_trace = record_route
++
++    async def callback(event, source):
++        eba = bot._legacy_message_to_eba_event(event, source)
++        await bot._handle_platform_event_body(eba, source)
++
++    adapter.listeners[platform_events.FriendMessage] = callback
++    runtime = object.__new__(RuntimePipeline)
++    runtime.ap, runtime.pipeline_entity = app, SimpleNamespace(uuid='pipeline')
++    runtime._assert_execution_active = AsyncMock()
++    runtime._record_lane_failure = Mock()
++    for name in ('finish_query', 'record_query_success', 'record_query_response', 'record_query_error'):
++        monkeypatch.setattr(MonitoringHelper, name, AsyncMock())
++    monkeypatch.setattr(MonitoringHelper, 'record_query_start', AsyncMock(return_value='monitoring-id'))
++    return SimpleNamespace(
++        pool=pool, adapter=adapter, bot=bot, runtime=runtime, app=app, context=context, patch=monkeypatch
++    )
++
++
++async def queued(harness, delivery):
++    for _ in range(100):
++        if harness.pool.queries or delivery.done():
++            break
++        await asyncio.sleep(0.001)
++    assert not delivery.done(), 'native ingress returned after enqueue rather than real completion'
++    assert len(harness.pool.queries) == 1
++    return harness.pool.queries[0]
++
++
++def configure_stages(harness, query, entered, release):
++    class Provider:
++        async def process(self, query, stage_name):
++            entered.set()
++            await release.wait()
++            query.resp_message_chain = [text_chain('generated response')]
++            query.resp_messages = []
++            return StageProcessResult(result_type=ResultType.CONTINUE, new_query=query)
++
++    query.pipeline_config = {
++        'output': {'force-delay': {'min': 0, 'max': 0}, 'misc': {'at-sender': False, 'quote-origin': False}}
++    }
++    harness.runtime.stage_containers = [
++        SimpleNamespace(inst_name='Provider', inst=Provider()),
++        SimpleNamespace(inst_name='SendResponseBackStage', inst=SendResponseBackStage(harness.app)),
++    ]
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize('send_response', [{'Code': 200}, {'Code': 409}])
++async def test_ack_waits_for_real_pipeline_and_successful_send(harness, send_response):
++    h = harness
++    h.adapter.bot.send_text_message.return_value = send_response
++    delivery = asyncio.create_task(h.adapter.ws_message(native_event()))
++    query = await queued(h, delivery)
++    entered, release = asyncio.Event(), asyncio.Event()
++    configure_stages(h, query, entered, release)
++    processing = asyncio.create_task(h.runtime._process_query(query))
++    await asyncio.wait_for(entered.wait(), 1)
++    assert h.adapter._ws_app.sent == []
++    assert not delivery.done()
++    release.set()
++    await asyncio.wait_for(processing, 1)
++    if send_response['Code'] == 200:
++        await asyncio.wait_for(delivery, 1)
++        assert h.adapter._ws_app.sent == [{'type': 'ack', 'event_id': 'event-1'}]
++        assert query.variables['_native_delivery_status'] == 'completed'
++        assert query.message_event.source_platform_object['_bridge_reply_sequence'] == 1
++        assert copy.copy(query).message_event.source_platform_object is query.message_event.source_platform_object
++    else:
++        with pytest.raises(RuntimeError):
++            await asyncio.wait_for(delivery, 1)
++        assert h.adapter._ws_app.sent == []
++        assert query.variables['_native_delivery_status'] == 'failed'
++    assert h.pool.queries == []
++    h.app.msg_aggregator.add_message.assert_not_awaited()
++
++
++@pytest.mark.asyncio
++async def test_native_filter_stage_discard_does_not_ack(harness):
++    h = harness
++    delivery = asyncio.create_task(h.adapter.ws_message(native_event()))
++    query = await queued(h, delivery)
++
++    class Filter:
++        async def process(self, query, stage_name):
++            return StageProcessResult(result_type=ResultType.INTERRUPT, new_query=query)
++
++    query.pipeline_config = {}
++    h.runtime.stage_containers = [SimpleNamespace(inst_name='GroupRespondRuleCheckStage', inst=Filter())]
++    await h.runtime._process_query(query)
++    with pytest.raises(RuntimeError):
++        await asyncio.wait_for(delivery, 1)
++    assert h.adapter._ws_app.sent == []
++    h.adapter.bot.send_text_message.assert_not_called()
++
++
++@pytest.mark.asyncio
++async def test_native_query_discard_is_not_success(harness):
++    h = harness
++    delivery = asyncio.create_task(h.adapter.ws_message(native_event()))
++    query = await queued(h, delivery)
++    await h.pool.remove_query(query)
++    with pytest.raises(RuntimeError):
++        await asyncio.wait_for(delivery, 1)
++    assert h.adapter._ws_app.sent == []
++
++
++@pytest.mark.asyncio
++async def test_native_queued_timeout_fails_and_removes_query(harness):
++    h = harness
++    h.patch.setattr(type(h.adapter), 'native_bridge_completion_timeout', 0.02)
++    delivery = asyncio.create_task(h.adapter.ws_message(native_event()))
++    query = await queued(h, delivery)
++    with pytest.raises(RuntimeError):
++        await asyncio.wait_for(delivery, 1)
++    assert h.adapter._ws_app.sent == []
++    assert query.variables['_native_delivery_status'] == 'failed'
++    assert h.pool.queries == []
++
++
++@pytest.mark.asyncio
++async def test_native_pipeline_cancel_does_not_ack(harness):
++    h = harness
++    delivery = asyncio.create_task(h.adapter.ws_message(native_event()))
++    query = await queued(h, delivery)
++    entered, release = asyncio.Event(), asyncio.Event()
++    configure_stages(h, query, entered, release)
++    processing = asyncio.create_task(h.runtime._process_query(query))
++    await asyncio.wait_for(entered.wait(), 1)
++    processing.cancel()
++    with pytest.raises(asyncio.CancelledError):
++        await processing
++    with pytest.raises(RuntimeError):
++        await asyncio.wait_for(delivery, 1)
++    assert h.adapter._ws_app.sent == []
++    h.adapter.bot.send_text_message.assert_not_called()
++
++
++def actual_controller(h):
++    h.app.workspace_service = SimpleNamespace(
++        get_execution_binding=AsyncMock(return_value=SimpleNamespace(instance_uuid='instance'))
++    )
++    h.app.persistence_mgr = SimpleNamespace(mode=SimpleNamespace(value='local'))
++    h.app.pipeline_mgr = SimpleNamespace(get_pipeline_by_uuid=AsyncMock(return_value=h.runtime))
++    h.runtime.run = h.runtime._process_query
++    controller = object.__new__(Controller)
++    controller.ap = h.app
++    return controller
++
++
++@pytest.mark.asyncio
++async def test_native_timeout_cancels_real_controller_work_before_send(harness):
++    h = harness
++    h.patch.setattr(type(h.adapter), 'native_bridge_completion_timeout', 0.05)
++    delivery = asyncio.create_task(h.adapter.ws_message(native_event()))
++    query = await queued(h, delivery)
++    entered, release = asyncio.Event(), asyncio.Event()
++    configure_stages(h, query, entered, release)
++    controller = actual_controller(h)
++    session = SimpleNamespace(_semaphore=asyncio.Semaphore(0))
++    processing = asyncio.create_task(controller._process_query(query, selected_session=session))
++    await asyncio.wait_for(entered.wait(), 1)
++    with pytest.raises(RuntimeError):
++        await asyncio.wait_for(delivery, 1)
++    with pytest.raises(asyncio.CancelledError):
++        await asyncio.wait_for(processing, 1)
++    assert query.variables['_native_delivery_status'] == 'failed'
++    assert h.adapter._ws_app.sent == []
++    h.adapter.bot.send_text_message.assert_not_called()
++    assert session._semaphore._value == 1
++    assert h.pool.queries == []
++
++
++@pytest.mark.asyncio
++async def test_native_controller_missing_pipeline_cannot_report_success(harness):
++    h = harness
++    delivery = asyncio.create_task(h.adapter.ws_message(native_event()))
++    query = await queued(h, delivery)
++    controller = actual_controller(h)
++    h.app.pipeline_mgr.get_pipeline_by_uuid.return_value = None
++    await controller._process_query(query, selected_session=SimpleNamespace(_semaphore=asyncio.Semaphore(0)))
++    with pytest.raises(RuntimeError):
++        await asyncio.wait_for(delivery, 1)
++    assert h.adapter._ws_app.sent == []
++
++
++@pytest.mark.asyncio
++async def test_native_query_cannot_be_claimed_as_steering(harness):
++    h = harness
++    delivery = asyncio.create_task(h.adapter.ws_message(native_event()))
++    query = await queued(h, delivery)
++    controller = object.__new__(Controller)
++    controller.ap = SimpleNamespace(
++        agent_run_orchestrator=SimpleNamespace(try_claim_steering_from_query=AsyncMock()),
++        pipeline_mgr=AsyncMock(),
++        logger=Mock(),
++    )
++    assert await controller._try_claim_steering_before_session_slot(query) is False
++    controller.ap.agent_run_orchestrator.try_claim_steering_from_query.assert_not_awaited()
++    await h.pool.remove_query(query)
++    with pytest.raises(RuntimeError):
++        await delivery
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize('native,with_id', [(False, True), (True, False)])
++async def test_ordinary_protocol_keeps_existing_aggregation_behavior(harness, native, with_id):
++    h = harness
++    h.patch.setattr(type(h.adapter), 'native_bridge_completion', native)
++    await h.adapter.ws_message(native_event('event-1' if with_id else None))
++    h.app.msg_aggregator.add_message.assert_awaited_once()
++    assert h.pool.queries == []
++
++
++@pytest.mark.asyncio
++async def test_native_pipeline_message_cannot_be_consumed_as_interaction_steering(harness):
++    h = harness
++    consume = AsyncMock(return_value=True)
++    h.app.agent_run_orchestrator = SimpleNamespace(interaction_manager=SimpleNamespace(consume_text_message=consume))
++    delivery = asyncio.create_task(h.adapter.ws_message(native_event()))
++    query = await queued(h, delivery)
++    consume.assert_not_awaited()
++    await h.pool.remove_query(query)
++    with pytest.raises(RuntimeError):
++        await delivery
++    assert h.adapter._ws_app.sent == []
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize('target_type', ['agent', 'event_processor'])
++async def test_native_non_pipeline_route_cannot_ack_without_completion_receipt(harness, target_type):
++    h = harness
++    h.bot._resolve_eba_event_binding.return_value = {'target_type': target_type, 'target_uuid': 'agent'}
++    h.app.agent_service = SimpleNamespace(
++        get_agent=AsyncMock(return_value={'kind': target_type, 'supported_event_patterns': ['message.received']})
++    )
++    h.bot._agent_supports_event_type = Mock(return_value=True)
++    h.bot._agent_product_to_binding = Mock(return_value=object())
++    h.bot._eba_event_to_agent_envelope = Mock(
++        return_value=SimpleNamespace(delivery=SimpleNamespace(supports_streaming=False), data={})
++    )
++
++    async def run(*args, **kwargs):
++        if False:
++            yield None
++
++    h.app.agent_run_orchestrator = SimpleNamespace(
++        try_claim_steering_from_event=AsyncMock(return_value=True), run=Mock(side_effect=run)
++    )
++    with pytest.raises(RuntimeError):
++        await h.adapter.ws_message(native_event())
++    h.app.agent_run_orchestrator.try_claim_steering_from_event.assert_not_awaited()
++    h.app.agent_run_orchestrator.run.assert_not_called()
++    assert h.adapter._ws_app.sent == []
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize('result', [RuntimeError('queue unavailable'), {'status': 'failed'}, {'status': 'discarded'}])
++async def test_native_route_failure_is_not_swallowed_by_gather(harness, result):
++    h = harness
++    bot = h.bot
++    bot.bot_entity.plugin_processors = []
++    bot._record_adapter_event = AsyncMock()
++    bot._persist_monitoring_ingress = AsyncMock()
++    bot._record_platform_event = Mock()
++    bot._dispatch_eba_event_to_processor = AsyncMock(
++        side_effect=result if isinstance(result, BaseException) else None, return_value=result
++    )
++    legacy = await h.adapter.event_converter.target2yiri(native_event(), '')
++    event = bot._legacy_message_to_eba_event(legacy, h.adapter)
++    with pytest.raises(RuntimeError):
++        await bot._handle_platform_event_body(event, h.adapter)

@@ -1,0 +1,2 @@
+# 补丁上下文空行保留格式所需的空格，源文件继续使用默认检查。
+integrations/langbot/*.patch whitespace=-blank-at-eol,-blank-at-eof

@@ -12,11 +12,15 @@ import stat
 import sys
 import tempfile
 
-LINUX_CACHE_VERSION = 1
+LINUX_CACHE_VERSION = 3
 
 
 class LinuxKeyError(RuntimeError):
     """缺少密钥或页一 HMAC 校验失败，不尝试其它账号或进程。"""
+
+
+class LinuxSnapshotChanged(RuntimeError):
+    """主库或 WAL 在同一组快照复制期间发生变化。"""
 
 
 def _account_name(name):
@@ -399,10 +403,10 @@ class LinuxReader:
         for path in (target, stamp):
             self.check_cache(path)
         self._validate_source(wal)
-        info = source.stat()
-        wal_info = wal.stat() if wal.exists() else None
-        revision = [STAMP_VERSION, LINUX_CACHE_VERSION, info.st_mtime_ns, info.st_size,
-                    wal_info.st_mtime_ns if wal_info else 0, wal_info.st_size if wal_info else 0]
+        try:
+            revision = [STAMP_VERSION, LINUX_CACHE_VERSION, self._bundle_evidence(source, wal)]
+        except (FileNotFoundError, LinuxSnapshotChanged):
+            revision = None
         old = None
         if stamp.exists():
             try:
@@ -410,27 +414,39 @@ class LinuxReader:
                     old = json.load(stream)
             except (ValueError, OSError):
                 pass
-        if old != revision or not target.exists():
+        if revision is None or old != revision or not target.exists():
             with tempfile.TemporaryDirectory(prefix=".build-", dir=self.workdir) as temporary:
                 temporary = Path(temporary)
                 snapshot, plain = temporary / "encrypted", temporary / "plain"
+                wal_snapshot, merged = temporary / "wal", temporary / "merged"
                 for attempt in range(4):
-                    self._snapshot(source, snapshot)
+                    try:
+                        evidence = self._bundle_evidence(source, wal)
+                        self._snapshot(source, snapshot, evidence["main"])
+                        if evidence["wal"] is not None:
+                            self._snapshot(wal, wal_snapshot, evidence["wal"])
+                        if evidence != self._bundle_evidence(source, wal):
+                            raise LinuxSnapshotChanged("数据库/WAL 快照复制期间发生变化")
+                    except (FileNotFoundError, LinuxSnapshotChanged):
+                        continue
                     self.db._decrypt_file(str(snapshot), str(plain), key)
                     os.chmod(plain, 0o600)
-                    if self.check_snapshot(plain):
-                        break
+                    if not self.check_snapshot(plain):
+                        continue
+                    if evidence["wal"] is not None and evidence["wal"][2] > self.db.WAL_HEADER_SZ:
+                        shutil.copyfile(plain, merged)
+                        os.chmod(merged, 0o600)
+                        from .linux_wal import merge_committed_wal
+                        with open(snapshot, "rb") as encrypted_source:
+                            source_salt = encrypted_source.read(16)
+                        merge_committed_wal(merged, wal_snapshot, key, source_salt)
+                        if not self.check_snapshot(merged):
+                            continue
+                        os.replace(merged, plain)
+                    revision = [STAMP_VERSION, LINUX_CACHE_VERSION, evidence]
+                    break
                 else:
-                    raise RuntimeError("数据库解密快照校验失败: %s" % rel)
-                if wal_info and wal_info.st_size > self.db.WAL_HEADER_SZ:
-                    wal_snapshot, merged = temporary / "wal", temporary / "merged"
-                    self._snapshot(wal, wal_snapshot)
-                    shutil.copyfile(plain, merged)
-                    os.chmod(merged, 0o600)
-                    self.db._merge_wal(str(merged), str(wal_snapshot), key, 0)
-                    if not self.check_snapshot(merged):
-                        raise RuntimeError("WAL 合并快照校验失败: %s" % rel)
-                    os.replace(merged, plain)
+                    raise RuntimeError("数据库/WAL 快照校验失败或源持续变化: %s" % rel)
                 self.check_cache(target)
                 os.replace(plain, target)
                 self.write_private(stamp, json.dumps(revision).encode())
@@ -439,11 +455,41 @@ class LinuxReader:
         connection.text_factory = _sqlite_text_factory
         return connection
 
-    def _snapshot(self, source, target):
+    @staticmethod
+    def _stream_evidence(stream, prefix_size):
+        """固定 inode、元数据与加密前缀；读取证据自身也必须保持稳定。"""
+        def metadata(info):
+            return [info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns]
+        before = metadata(os.fstat(stream.fileno()))
+        stream.seek(0)
+        prefix = stream.read(prefix_size)
+        if before != metadata(os.fstat(stream.fileno())):
+            raise LinuxSnapshotChanged("读取数据库/WAL 证据时源发生变化")
+        return before + [hashlib.sha256(prefix).hexdigest()]
+
+    def _bundle_evidence(self, source, wal):
+        """主库页一包含 salt；WAL 头包含 reset 世代，且不存在也属于证据。"""
         with self.source(source) as stream:
+            main = self._stream_evidence(stream, 4096)
+        try:
+            with self.source(wal) as stream:
+                wal_evidence = self._stream_evidence(stream, 32)
+        except FileNotFoundError:
+            wal_evidence = None
+        return {"main": main, "wal": wal_evidence}
+
+    def _snapshot(self, source, target, expected=None):
+        with self.source(source) as stream:
+            prefix_size = 32 if str(source).endswith("-wal") else 4096
+            before = self._stream_evidence(stream, prefix_size)
+            if expected is not None and before != expected:
+                raise LinuxSnapshotChanged("数据库/WAL 快照源身份发生变化")
+            stream.seek(0)
             fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
             with os.fdopen(fd, "wb") as out:
                 shutil.copyfileobj(stream, out)
+            if before != self._stream_evidence(stream, prefix_size):
+                raise LinuxSnapshotChanged("数据库/WAL 快照源在复制期间发生变化")
 
     def invalidate(self):
         for path in self.workdir.iterdir():

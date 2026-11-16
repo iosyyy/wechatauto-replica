@@ -1,0 +1,21 @@
+ARG BASE_IMAGE=local/wechatauto-linux-desktop:0.1.0
+FROM ${BASE_IMAGE}
+
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    at-spi2-core libatk-bridge2.0-0t64 python3-aiohttp python3-colorama \
+    python3-cryptography python3-packaging python3-pil python3-psutil \
+    python3-pyperclip python3-zstandard \
+    && rm -rf /var/lib/apt/lists/*
+COPY agent-desktop-linux-x64 /usr/local/bin/agent-desktop
+COPY agent-desktop-linux-clipboard-owner /usr/local/bin/agent-desktop-linux-clipboard-owner
+RUN echo 'da52a1eb2152cdc21b756ab20e6208d242da8062c73cd20bc8a8ae2a0384392c  /usr/local/bin/agent-desktop' | sha256sum --check --strict \
+    && echo '3e96f92b805c0d1f9de309935d62f4189b8e11e1385ad022bb878487bb3942ec  /usr/local/bin/agent-desktop-linux-clipboard-owner' | sha256sum --check --strict
+RUN chmod 755 /usr/local/bin/agent-desktop /usr/local/bin/agent-desktop-linux-clipboard-owner
+COPY wechatauto /opt/wechatauto/wechatauto
+COPY desktop.py /opt/wechat-desktop/desktop.py
+COPY supervisord.conf /etc/supervisor/wechat-desktop.conf
+ENV PYTHONPATH=/opt/wechatauto \
+    QT_ACCESSIBILITY=1 \
+    QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1
+USER 10001:10001
