@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wechatauto-replica"
-version = "1.2.10+iosyyy.linux.1"
-description = "微信 4.x Windows 自动化与 Linux 读取基础：显式账号和已提供密钥下的 SQLCipher 数据库读取"
+version = "1.2.10+iosyyy.linux.2"
+description = "微信 4.x Windows 自动化与原生 Linux 数据库读取、取钥及文本桥接"
 readme = "README_pypi.md"
 requires-python = ">=3.9"
 license = { text = "Apache-2.0" }
@@ -45,6 +45,7 @@ dependencies = [
 wechatauto = "wechatauto.cli:main"
 
 [project.optional-dependencies]
+linux-bridge = ["aiohttp>=3.9,<4; sys_platform == 'linux'"]
 moments = ["pyautogui>=0.9.53", "opencv-python>=4.8.0"]
 guia = ["winsdk>=1.0.0b10; sys_platform == 'win32'", "pypinyin>=0.48.0"]
 

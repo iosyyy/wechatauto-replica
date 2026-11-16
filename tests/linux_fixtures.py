@@ -61,6 +61,27 @@ def encrypt_pages(raw, key, salt, explicit_salt=False):
     return bytes(result)
 
 
+def wal_bytes(frames, salt=b"fixture!", byteorder="little"):
+    """生成标准 SQLite WAL 头与累计校验；可显式附带旧世代帧。"""
+    def checksum(data, state=(0, 0)):
+        first, second = state
+        for start in range(0, len(data), 8):
+            first = (first + int.from_bytes(data[start:start + 4], byteorder) + second) & 0xffffffff
+            second = (second + int.from_bytes(data[start + 4:start + 8], byteorder) + first) & 0xffffffff
+        return first, second
+    magic = 0x377f0682 if byteorder == "little" else 0x377f0683
+    prefix = struct.pack(">IIII", magic, 3007000, PAGE, 0) + salt
+    state = checksum(prefix)
+    output = bytearray(prefix + struct.pack(">II", *state))
+    for frame in frames:
+        pgno, commit_size, page = frame[:3]
+        frame_salt = frame[3] if len(frame) == 4 else salt
+        prefix = struct.pack(">II", pgno, commit_size)
+        state = checksum(prefix + page, state)
+        output.extend(prefix + frame_salt + struct.pack(">II", *state) + page)
+    return bytes(output)
+
+
 class DatabaseFixture:
     def __init__(self, base, account="wxid_fixture_abcd", master=False, explicit_salt=False):
         self.base = Path(base)
@@ -123,16 +144,13 @@ class DatabaseFixture:
         salt = hashlib.sha256((self.account + rel).encode()).digest()[:16]
         key = bytes.fromhex(self.keys[rel])[:32]
         encrypted = encrypt_pages(raw, key, salt, self.explicit_salt)
-        wal_salt = b"fixture!"
-        frames = bytearray()
-        for index in range(0, len(raw), PAGE):
-            pgno = index // PAGE + 1
-            frames.extend(struct.pack(">II", pgno, len(raw) // PAGE) + wal_salt + b"\x00" * 8)
-            frames.extend(encrypted[index:index + PAGE])
-        frames.extend(struct.pack(">II", 1, len(raw) // PAGE) + b"old-salt" + b"\x00" * 8)
-        frames.extend(b"\xff" * PAGE)
+        page_count = len(raw) // PAGE
+        frames = [(index // PAGE + 1,
+                   page_count if index + PAGE == len(raw) else 0,
+                   encrypted[index:index + PAGE]) for index in range(0, len(raw), PAGE)]
+        frames.append((1, page_count, b"\xff" * PAGE, b"old-salt"))
         wal = Path(str(self.storage / rel) + "-wal")
-        wal.write_bytes(b"\x00" * 16 + wal_salt + b"\x00" * 8 + frames)
+        wal.write_bytes(wal_bytes(frames))
         return wal
 
     def write_keys(self):

@@ -69,7 +69,7 @@ def main():
     subprocess.run(["xauth", "-f", authority], input=("add " + os.environ["DISPLAY"]
                    + " . " + secrets.token_hex(16) + "\n").encode(), check=True,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
-    os.execvp("supervisord", ["supervisord", "-n", "-c", CONFIG])
+    os.execvp("dbus-run-session", ["dbus-run-session", "--", "supervisord", "-n", "-c", CONFIG])
 
 
 if __name__ == "__main__":

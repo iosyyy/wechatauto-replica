@@ -3,3 +3,10 @@
 !desktop.py
 !supervisord.conf
 !client.deb
+!Dockerfile.bridge
+!agent-desktop-linux-x64
+!agent-desktop-linux-clipboard-owner
+!wechatauto
+!wechatauto/**
+**/__pycache__
+**/*.pyc

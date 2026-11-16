@@ -1,0 +1,17 @@
+[Unit]
+Description=Official Linux WeChat native LangBot bridge
+After=docker.service
+Requires=docker.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/docker exec -e PYTHONPATH=/home/wechat/.local/share/wechatauto-bridge wechatauto-linux-desktop-1 /usr/bin/python3 -m wechatauto.bridge.service run --config /home/wechat/.config/wechatauto-bridge/config.json
+ExecStop=/usr/bin/docker exec -e PYTHONPATH=/home/wechat/.local/share/wechatauto-bridge wechatauto-linux-desktop-1 /usr/bin/python3 -m wechatauto.bridge.service stop --config /home/wechat/.config/wechatauto-bridge/config.json
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=45
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

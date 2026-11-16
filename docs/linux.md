@@ -5,12 +5,10 @@
 
 ## 当前范围
 
-第一阶段提供不依赖 Windows 组件的数据库读取接口：账号发现、已提供密钥下的
-SQLCipher 解密、群消息分库查询、发送者映射和增量监听。
-
-**当前阶段不提供 Linux 自动取钥或 GUI 发消息。** 密钥必须来自你自己账号的
-已验证本地来源。Linux 微信客户端的版本、数据库结构和真实消息仍需单独联调。
-使用合成数据库通过测试，不能证明某个 Linux 微信版本已兼容。
+读取接口包括账号发现、SQLCipher 解密、群消息分库查询、发送者映射和增量监听。
+另有独立、显式启用的原生取钥与文本发送桥接，见
+[部署说明](linux-bridge.md) 和 [agent-desktop 发送边界](linux-sender-agent-desktop.md)。
+读取、取钥、界面发送和 LangBot 端到端验收分别记录，不把合成测试当真实兼容证明。
 
 后续发送仍需官方 Linux 微信常驻并登录，以及可操作的图形会话；这不是无客户端
 的协议服务。Windows 后端保留，Linux 不使用其进程内存偏移或自动切换账号逻辑。
@@ -34,7 +32,7 @@ Linux 安装不包含 Windows UIAutomation、pywin32、WinRT OCR 或 Windows GUI
 服务器没有图形桌面时，可使用
 [独立登录示例](../examples/linux-desktop/README.md) 启动官方客户端和私人网页桌面。
 网页端口仅绑定服务器回环，经 SSH 在本机访问；登录态保留在独立的持久目录。
-这一步不启用数据库读取或 LangBot 收发桥接，实际扫码登录仍由账号本人完成。
+桌面本身不启用数据库读取或 LangBot 收发桥接；桥接需要另行配置，扫码确认由账号本人完成。
 
 ## 数据与密钥
 
@@ -95,13 +93,14 @@ Linux 仅允许默认的 `db.workdir/listener_watermark.json` 水位文件；传
 
 新注册会话默认从当前最新消息之后开始，历史总结使用 `get_messages` 或
 `export_history` 单独读取。监听器支持水位恢复，但上游回调重试耗尽会推进水位；
-因此还不能直接把 HTTP 转发回调当作可靠 LangBot 桥接。后续需要持久收件箱，
-持久化失败则暂停源读取，发送结果未确认时不能盲目重发。
+因此不要直接把该 Listener 的 HTTP 回调当作可靠 LangBot 桥接。
+本分支的独立 `wechatauto.bridge.native` 使用持久收件箱、分片水位与发送日志；
+持久化失败不推进源水位，发送结果未确认时不能盲目重发。
 
 ## 离线验证
 
 ```bash
-python -m pip install packaging
+python -m pip install '.[linux-bridge]' packaging
 python -m unittest discover -s tests -p test_platform_imports.py -v
 python -m unittest discover -s tests -p test_package_metadata.py -v
 python -m unittest discover -s tests -p 'test_linux*.py' -v
