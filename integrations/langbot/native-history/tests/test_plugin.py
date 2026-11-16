@@ -40,12 +40,16 @@ class PluginTests(unittest.IsolatedAsyncioTestCase):
                          "http://192.168.1.2:5080")
 
     def test_exact_private_docker_service_requires_explicit_private_http(self):
-        url = "http://wechatauto-linux-desktop-1:5080"
-        with self.assertRaises(HistoryError):
-            settings_from_config({**CONFIG, "server_url": url})
-        self.assertEqual(settings_from_config({**CONFIG, "server_url": url,
-                                               "allow_private_http": True}).server_url, url)
-        for hostname in ("other-service", "wechatauto-linux-desktop-1.example.com", "wechatauto-linux-desktop-2"):
+        for hostname in ("wechatauto-linux-desktop-1", "agent-wechat-native-1"):
+            url = "http://" + hostname + ":5080"
+            for flag in (None, False, "true", 1):
+                with self.subTest(hostname=hostname, flag=flag), self.assertRaises(HistoryError):
+                    settings_from_config({**CONFIG, "server_url": url, "allow_private_http": flag})
+            with self.subTest(hostname=hostname, flag=True):
+                self.assertEqual(settings_from_config({**CONFIG, "server_url": url,
+                                                       "allow_private_http": True}).server_url, url)
+        for hostname in ("other-service", "wechatauto-linux-desktop-1.example.com", "wechatauto-linux-desktop-2",
+                         "agent-wechat-native-1.example.com", "agent-wechat-native-2", "agent-wechat-native-1."):
             with self.subTest(hostname=hostname), self.assertRaises(HistoryError):
                 settings_from_config({**CONFIG, "server_url": "http://" + hostname + ":5080",
                                       "allow_private_http": True})

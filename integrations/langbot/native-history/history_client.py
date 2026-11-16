@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 import httpx
 
 
-PRIVATE_DOCKER_HOST = "wechatauto-linux-desktop-1"
+PRIVATE_DOCKER_HOSTS = frozenset({"wechatauto-linux-desktop-1", "agent-wechat-native-1"})
 
 
 class HistoryError(Exception):
@@ -31,7 +31,7 @@ def settings_from_config(config):
                 or parsed.path not in ("", "/") or parsed.query or parsed.fragment):
             raise ValueError()
         if parsed.scheme == "http":
-            if parsed.hostname == PRIVATE_DOCKER_HOST:
+            if parsed.hostname in PRIVATE_DOCKER_HOSTS:
                 if config.get("allow_private_http") is not True:
                     raise ValueError()
             elif parsed.hostname != "localhost":

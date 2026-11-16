@@ -18,9 +18,9 @@ The tool checks `QueryBasedAPIProxy.get_bot_uuid()` and `get_query_vars()` again
 }
 ```
 
-Keep runtime files private (`0600`). Use a private interface/firewall and a dedicated history token. Forward no URL or query-string credentials. Do not expose this capability through a public proxy. The plugin accepts HTTP loopback addresses by default; HTTP to a numeric private IP or the exact internal Docker service hostname `wechatauto-linux-desktop-1` additionally requires `allow_private_http=true`. Other HTTP hostnames are rejected. A configured HTTPS URL is also accepted. Redirects and environment HTTP proxies are disabled.
+Keep runtime files private (`0600`). Use a private interface/firewall and a dedicated history token. Forward no URL or query-string credentials. Do not expose this capability through a public proxy. The plugin accepts HTTP loopback addresses by default; HTTP to a numeric private IP or either exact internal Docker service hostname `wechatauto-linux-desktop-1` or `agent-wechat-native-1` additionally requires the boolean `allow_private_http=true`. Other HTTP hostnames, including lookalike names and suffixed domains, are rejected. A configured HTTPS URL is also accepted. Redirects and environment HTTP proxies are disabled.
 
-For this deployment, attach the plugin runtime and the native desktop service to the private Docker network `wechatpad_link` persistently, without publishing port 5080. Set `server_url=http://wechatauto-linux-desktop-1:5080` and `allow_private_http=true`; the stable service hostname avoids relying on a container IP that may change. This is installation configuration and cannot be supplied by tool arguments.
+Attach the plugin runtime and the selected native service to the private Docker network `wechatpad_link` persistently, without publishing port 5080. The official-desktop bridge uses `server_url=http://wechatauto-linux-desktop-1:5080`; the Agent WeChat native daemon with its Python WeChatPad gateway uses `server_url=http://agent-wechat-native-1:5080`. Both require `allow_private_http=true`. Stable service hostnames avoid relying on container IPs that may change. This is installation configuration and cannot be supplied by tool arguments.
 
 An empty group allowlist is valid and returns an honest empty authorized-group list. After inviting the logged-in bot account into a group, verify its exact `@chatroom` username and add it to `native_history.allowed_groups`. Configure inbound `allowed_chats` and outbound `write_chats` separately for group interactions; enabling history does not authorize sending.
 
@@ -45,7 +45,16 @@ python -m unittest discover -s tests -v
 lbp build -o /private/tmp/native-history-dist
 ```
 
-Run these commands from this directory. The output is `local-NativeWeChatHistory-0.1.1.lbpkg`. Install that local package through LangBot's plugin management. The package declares no workspace operations and no privileged capabilities. Enable its tools on the native pipeline; retain the current model and persona and normal automatic tool selection.
+Run these commands from this directory. The output is `local-NativeWeChatHistory-0.1.2.lbpkg`. Install that local package through LangBot's plugin management. The package declares no workspace operations and no privileged capabilities. Enable its tools on the native pipeline; retain the current model and persona and normal automatic tool selection.
+
+For the existing server-local installation API, authenticate privately with `POST /api/v1/user/auth` and use the returned bearer token in request headers. Keep configuration responses and credentials out of logs. Upgrade the same `local/NativeWeChatHistory` identity as follows:
+
+1. `GET /api/v1/plugins/local/NativeWeChatHistory/config`; keep `data.config` in trusted process memory so the dedicated `api_token` and `owners_json` remain unchanged.
+2. `POST /api/v1/plugins/install/local` as multipart form field `file`, containing `local-NativeWeChatHistory-0.1.2.lbpkg` with content type `application/zip`. Verify the package SHA-256 before uploading.
+3. Poll `GET /api/v1/system/tasks/<task_id>` from the install response until `data.runtime.done` is true; stop on a nonempty `data.runtime.exception`.
+4. `PUT /api/v1/plugins/local/NativeWeChatHistory/permissions` with `{"workspace_operations":[],"capabilities":[],"confirm":true}` and require explicit activation without compatibility mode or pending confirmation.
+5. Wait for the config endpoint to be ready, then `PUT /api/v1/plugins/local/NativeWeChatHistory/config` with the preserved config object, changing only `server_url` to `http://agent-wechat-native-1:5080` and `allow_private_http` to `true` for protocol migration.
+6. Read the config back inside the trusted process and check those two values plus equality of the preserved credential and owner bindings; report only booleans and public package/version metadata. The dynamic caller identity headers and separate history credential are unchanged.
 
 Set installation-scoped configuration, without copying secrets into a chat or a shell command:
 

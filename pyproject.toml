@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wechatauto-replica"
-version = "1.2.10+iosyyy.linux.3"
-description = "微信 4.x Windows 自动化与原生 Linux 数据库读取、取钥及文本桥接"
+version = "1.2.10+iosyyy.linux.4"
+description = "微信 4.x Windows 自动化、Linux 数据库读取与桌面或原生协议文本桥接"
 readme = "README_pypi.md"
 requires-python = ">=3.9"
 license = { text = "Apache-2.0" }
