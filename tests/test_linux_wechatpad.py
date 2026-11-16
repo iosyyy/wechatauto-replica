@@ -295,8 +295,11 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
                 diagnostic = logs.records[0].getMessage()
                 self.assertTrue(diagnostic.startswith(prefix))
                 frames = diagnostic[len(prefix):].split(">")
-                self.assertEqual([frame.split(":")[0] for frame in frames],
-                                 ["_prepare_coordinates", "_coordinate_view", "_snapshot_data", "_command"])
+                expected_frames = [["_prepare_coordinates", "_coordinate_view", "_snapshot_data", "_command"]]
+                if isinstance(error, TimeoutError):
+                    # Python 3.12 的线程 Future 可能重建 TimeoutError，丢弃线程内堆栈。
+                    expected_frames.append(["dispatch", "to_thread"])
+                self.assertIn([frame.split(":")[0] for frame in frames], expected_frames)
                 self.assertTrue(all(frame.split(":")[1].isdigit() for frame in frames))
                 self.assertIsNone(logs.records[0].exc_info)
                 for value in (secret, "private.invalid", "test-secret", "private-message-body",
